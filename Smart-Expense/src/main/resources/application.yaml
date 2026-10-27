@@ -28,6 +28,13 @@ spring:
         prefetch: 10
         default-requeue-rejected: false
 
+# 认证（docs/12）：mode=header 为兼容期，联调完成切 jwt
+auth:
+  mode: ${AUTH_MODE:header}
+  # 生产必须通过环境变量替换，长度 >= 32 字节
+  jwt-secret: ${JWT_SECRET:smart-expense-dev-secret-key-please-change-32}
+  token-ttl-minutes: ${JWT_TTL_MINUTES:120}
+
 mybatis-plus:
   configuration:
     map-underscore-to-camel-case: true

@@ -25,4 +25,14 @@ public interface SysUserMapper extends BaseMapper<SysUser> {
              LIMIT 1
             """)
     SysUser selectFirstActiveByRoleCode(@Param("roleCode") String roleCode);
+
+    /** 查用户角色 code 列表（docs/12 登录与权限校验用） */
+    @Select("""
+            SELECT r.code
+              FROM sys_user_role ur
+              JOIN sys_role r ON r.id = ur.role_id
+             WHERE ur.user_id = #{userId}
+             ORDER BY r.id
+            """)
+    java.util.List<String> selectRoleCodes(@Param("userId") Long userId);
 }

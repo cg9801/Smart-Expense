@@ -12,6 +12,8 @@ public enum ErrorCode {
 
     SUCCESS(0, HttpStatus.OK, "ok"),
     PARAM_ERROR(40001, HttpStatus.BAD_REQUEST, "参数校验失败"),
+    /** 未登录、token 缺失/过期/签名错误，见 docs/12 */
+    UNAUTHORIZED(40101, HttpStatus.UNAUTHORIZED, "未登录或登录已过期"),
     NOT_FOUND(40401, HttpStatus.NOT_FOUND, "资源不存在"),
     FORBIDDEN(40301, HttpStatus.FORBIDDEN, "无权限"),
     STATE_ILLEGAL(40901, HttpStatus.CONFLICT, "当前状态不允许该操作"),

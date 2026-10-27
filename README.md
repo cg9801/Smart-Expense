@@ -87,8 +87,11 @@ RabbitMQ 管理页：http://127.0.0.1:15672（guest/guest）。
 | POST | `/api/v1/admin/reconcile/run` | 触发对账 |
 | GET | `/api/v1/admin/reconcile/diffs` | 对账差异 |
 | GET | `/api/v1/admin/metrics` | 运营指标 |
+| POST | `/api/v1/auth/login` | 登录，返回 JWT |
+| GET | `/api/v1/auth/me` | 当前用户与角色 |
 
-身份暂用请求头 `X-User-Id`（seed 数据：1 林一 / 2 张三 / 4 王五 / 5 赵六 / 6 管理员）。
+认证：`POST /auth/login` 获取 JWT，之后带 `Authorization: Bearer <token>`。
+兼容期可继续用请求头 `X-User-Id`（seed 数据：1 林一 / 2 张三 / 4 王五 / 5 赵六 / 6 管理员），默认密码 `123456`。
 
 ## 设计要点
 

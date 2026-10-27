@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<!--
+  运营管理台 · 管理员页（前端原型）
+  ---------------------------------------------------------------
+  纯静态原型：浏览器直接打开即可预览，数据来自脚本顶部 MOCK。
+  对应接口（docs/03-接口清单.md §2.4 / §2.6，均已实现）：
+    GET  /api/v1/admin/metrics                        → 运营指标（MetricsVO）
+    GET  /api/v1/payments?status=&page=&size=         → 付款单分页
+    POST /api/v1/payments/{id}/confirm                → 模拟银行回执触发 T6（重复确认 40901）
+    GET  /api/v1/admin/reconcile/records              → 对账批次
+    GET  /api/v1/admin/reconcile/diffs?status=OPEN    → 差异列表
+    POST /api/v1/admin/reconcile/diffs/{id}/repair    → 人工补偿（OPEN → REPAIRED）
+  现阶段身份只认 X-User-Id；JWT + ADMIN/FINANCE 角色校验见 docs/03 §2.4 备注。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>运营管理台 · Smart Expense</title>
+<link rel="stylesheet" href="/css/common.css" />
+<style>
+  /* 本页专属：区块切换 + 忙态行 */
+  .seg{ display:inline-flex; border:1px solid var(--rule); border-radius:3px; overflow:hidden; background:rgba(255,255,255,.6); }
+  .seg button{
+    border:0; background:transparent; padding:7px 18px; cursor:pointer;
+    font-family:inherit; font-size:13px; letter-spacing:.12em; color:var(--ink-2);
+    transition:all .18s var(--ease);
+  }
+  .seg button[aria-pressed="true"]{ background:var(--ink); color:var(--paper); }
+  tr.is-busy{ opacity:.55; pointer-events:none; }
+  .tiles{ margin-top:34px; }
+</style>
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="topnav-in">
+    <a class="brandmark" href="/report-list.html"><span class="sq">支</span><b>Smart Expense</b></a>
+    <div class="tabs">
+      <a href="/report-list.html">我的报销单</a>
+      <a href="/report-submit.html">新建报销单</a>
+      <a href="/approval-todo.html">审批待办</a>
+      <a href="/admin-console.html" aria-current="page">运营管理台</a>
+    </div>
+    <div class="whoami">
+      <span class="lb">当前身份</span>
+      <select id="whoami" title="JWT 接入前的临时身份，请求以 X-User-Id 头携带"></select>
+    </div>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <header class="masthead rise">
+    <div>
+      <h1>运营管理台</h1>
+      <p class="sub">Operations Console&nbsp;&nbsp;·&nbsp;&nbsp;ADMIN / FINANCE</p>
+    </div>
+    <div class="meta" id="today">—</div>
+  </header>
+
+  <!-- ===== 指标（docs/10-指标与监控.md §2） ===== -->
+  <div class="tiles rise" style="--d:80ms" id="tiles"></div>
+
+  <section class="sec rise" style="--d:140ms">
+    <div class="sec-head">
+      <span class="sec-no">01</span><h2>资金动作</h2>
+      <div class="seg" style="margin-left:auto">
+        <button id="tabPay" aria-pressed="true">付款单</button>
+        <button id="tabRec" aria-pressed="false">对账差异</button>
+      </div>
+    </div>
+
+    <!-- 付款单：确认到账触发 T6 PAID -->
+    <div id="panePay">
+      <table class="ledger">
+        <thead>
+          <tr>
+            <th>付款单号</th><th>报销单号</th><th>收款人</th>
+            <th class="ta-r">金额</th><th>状态</th><th>付款时间</th><th class="ta-r">操作</th>
+          </tr>
+        </thead>
+        <tbody id="payRows"></tbody>
+      </table>
+      <div id="payEmpty" class="empty" hidden>没有付款单</div>
+    </div>
+
+    <!-- 对账：批次概览 + 差异处理 -->
+    <div id="paneRec" hidden>
+      <div class="sec-head" style="margin-top:6px">
+        <h2 style="font-size:13.5px;letter-spacing:.16em;color:var(--ink-2)">对账批次</h2>
+        <button class="btn-ghost btn-sm" id="runRecon" style="margin-left:auto">手动对账（T-1）</button>
+      </div>
+      <table class="ledger">
+        <thead>
+          <tr><th>批次</th><th>业务日期</th><th class="ta-r">扫描</th><th class="ta-r">差异</th><th>状态</th><th>结束时间</th></tr>
+        </thead>
+        <tbody id="recRows"></tbody>
+      </table>
+      <div class="sec-head" style="margin-top:30px">
+        <h2 style="font-size:13.5px;letter-spacing:.16em;color:var(--ink-2)">差异明细</h2>
+      </div>
+      <table class="ledger">
+        <thead>
+          <tr><th>#</th><th>业务日期</th><th>差异类型</th><th>报销单</th><th>状态</th><th class="ta-r">操作</th></tr>
+        </thead>
+        <tbody id="diffRows"></tbody>
+      </table>
+      <div id="recEmpty" class="empty" hidden>没有对账差异，账实相符</div>
+    </div>
+  </section>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(function(){
+  "use strict";
+
+  const USERS = [
+    { id: 1001, name: "栀麦（员工）" },
+    { id: 1002, name: "陈砚（主管）" },
+    { id: 1003, name: "林知夏（财务）" },
+    { id: 1004, name: "周叙白（总监）" },
+    { id: 1005, name: "admin（管理员）" }
+  ];
+  const whoSel = document.getElementById("whoami");
+  USERS.forEach(u => {
+    const o = document.createElement("option");
+    o.value = u.id; o.textContent = u.name;
+    whoSel.appendChild(o);
+  });
+  whoSel.value = localStorage.getItem("se.uid") || USERS[4].id;
+  whoSel.addEventListener("change", () => {
+    localStorage.setItem("se.uid", whoSel.value);
+    toast("身份已切换，接口层将以 X-User-Id:" + whoSel.value + " 请求");
+  });
+  const uid = () => localStorage.getItem("se.uid") || USERS[4].id;
+
+  /* ---- 演示数据：字段名与 MetricsVO / PaymentVO / ReconcileRecordVO / ReconcileDiffVO 一致 ---- */
+  const MOCK = {
+    metrics: {
+      submitCount: 128, approvedCount: 96, rejectedCount: 11,
+      approveRate: 0.899, avgApprovalHours: 7.4,
+      paymentPending: 5, reconcileOpenDiffs: 2, outboxDead: 0
+    },
+    payments: {
+      total: 3,
+      records: [
+        { id: 301, paymentNo: "PAY20261026-0003", reportId: 1004, reportNo: "EXP20261022-0004", title: "云服务年度续费分摊",
+          payeeUserId: 1001, payeeName: "栀麦", amount: 4800.00, status: "CREATED", paidAt: null, createdAt: "2026-10-26 09:10" },
+        { id: 300, paymentNo: "PAY20261024-0002", reportId: 1005, reportNo: "EXP20261024-0005", title: "团队季度团建餐费",
+          payeeUserId: 1001, payeeName: "栀麦", amount: 1260.00, status: "PAID", paidAt: "2026-10-25 10:02", createdAt: "2026-10-24 18:40" },
+        { id: 299, paymentNo: "PAY20261020-0001", reportId: 1003, reportNo: "EXP20261020-0003", title: "外地会议住宿（超标）",
+          payeeUserId: 1002, payeeName: "陈砚", amount: 896.00, status: "FAILED", paidAt: null, createdAt: "2026-10-20 19:15" }
+      ]
+    },
+    records: {
+      total: 2,
+      records: [
+        { id: 21, bizDate: "2026-10-26", scannedCount: 46, diffCount: 2, status: "DONE", startedAt: "2026-10-27 01:00", finishedAt: "2026-10-27 01:00" },
+        { id: 20, bizDate: "2026-10-25", scannedCount: 39, diffCount: 0, status: "DONE", startedAt: "2026-10-26 01:00", finishedAt: "2026-10-26 01:00" }
+      ]
+    },
+    diffs: {
+      total: 2,
+      records: [
+        { id: 77, bizDate: "2026-10-26", diffType: "BUDGET_NOT_DEDUCTED", reportId: 1009, status: "OPEN", repairedAt: null, handlerId: null, createdAt: "2026-10-27 01:00" },
+        { id: 76, bizDate: "2026-10-26", diffType: "PAYMENT_MISSING", reportId: 1005, status: "REPAIRED", repairedAt: "2026-10-27 01:00", handlerId: null, createdAt: "2026-10-27 01:00" }
+      ]
+    }
+  };
+  const DIFF_TYPE = {
+    BUDGET_NOT_DEDUCTED: "预算未扣减",
+    PAYMENT_MISSING:     "付款单缺失",
+    AMOUNT_MISMATCH:     "金额不一致",
+    STATUS_STUCK:        "状态卡滞"
+  };
+
+  /* ---- API 层：USE_MOCK=false 即走真实接口 ---- */
+  const USE_MOCK = true;
+  const api = {
+    async metrics(){
+      if (USE_MOCK) return MOCK.metrics;
+      return (await (await fetch("/api/v1/admin/metrics", { headers:{ "X-User-Id": uid() } })).json()).data;
+    },
+    async payments(){
+      if (USE_MOCK) return MOCK.payments;
+      return (await (await fetch("/api/v1/payments?page=1&size=20", { headers:{ "X-User-Id": uid() } })).json()).data;
+    },
+    async confirmPayment(id){
+      if (USE_MOCK) return;
+      const res = await fetch("/api/v1/payments/" + id + "/confirm", { method:"POST", headers:{ "X-User-Id": uid() } });
+      const body = await res.json();
+      if (body.code !== 0) throw new Error(body.message);   // 重复确认 → 40901
+    },
+    async records(){
+      if (USE_MOCK) return MOCK.records;
+      return (await (await fetch("/api/v1/admin/reconcile/records?page=1&size=10", { headers:{ "X-User-Id": uid() } })).json()).data;
+    },
+    async diffs(){
+      if (USE_MOCK) return MOCK.diffs;
+      return (await (await fetch("/api/v1/admin/reconcile/diffs?page=1&size=20", { headers:{ "X-User-Id": uid() } })).json()).data;
+    },
+    async repair(id){
+      if (USE_MOCK) return;
+      const res = await fetch("/api/v1/admin/reconcile/diffs/" + id + "/repair", { method:"POST", headers:{ "X-User-Id": uid() } });
+      const body = await res.json();
+      if (body.code !== 0) throw new Error(body.message);
+    },
+    async runReconcile(){
+      if (USE_MOCK) return;
+      await fetch("/api/v1/admin/reconcile/run", { method:"POST", headers:{ "X-User-Id": uid() } });
+    }
+  };
+
+  /* ---- 指标瓦片 ---- */
+  const fmt = n => Number(n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  function renderTiles(m){
+    document.getElementById("tiles").innerHTML = [
+      tile("Submit · 30d", m.submitCount, "累计提交单量"),
+      tile("Approve Rate", Math.round(m.approveRate * 100) + "%", "通过 " + m.approvedCount + " · 驳回 " + m.rejectedCount, "jade"),
+      tile("Avg Approval", m.avgApprovalHours + "h", "平均审批时长", "amber"),
+      tile("Payments Due", m.paymentPending, "待付款单", m.paymentPending > 0 ? "amber" : ""),
+      tile("Open Diffs", m.reconcileOpenDiffs, "对账未处理差异", m.reconcileOpenDiffs > 0 ? "seal" : "jade"),
+      tile("Outbox Dead", m.outboxDead, "死信消息", m.outboxDead > 0 ? "seal" : "jade")
+    ].join("");
+  }
+  function tile(cap, val, note, tone){
+    return '<div class="tile"' + (tone ? ' data-tone="' + tone + '"' : '') + '>' +
+      '<div class="cap">' + cap + '</div><div class="val">' + val + '</div>' +
+      '<div class="note">' + note + '</div></div>';
+  }
+
+  /* ---- 付款单 ---- */
+  function renderPayments(data){
+    const tbody = document.getElementById("payRows");
+    tbody.innerHTML = "";
+    document.getElementById("payEmpty").hidden = data.records.length > 0;
+    data.records.forEach(p => {
+      const tr = document.createElement("tr");
+      tr.innerHTML =
+        '<td class="mono">' + p.paymentNo + '</td>' +
+        '<td class="mono">' + p.reportNo + '</td>' +
+        '<td>' + p.payeeName + '</td>' +
+        '<td class="num">¥' + fmt(p.amount) + '</td>' +
+        '<td><span class="chip" data-state="' + p.status + '"><i></i></span></td>' +
+        '<td class="mut">' + (p.paidAt || "—") + '</td>' +
+        '<td><div class="row-actions">' +
+          (p.status === "CREATED" ? '<button class="btn btn-sm" data-act="confirm" data-id="' + p.id + '">确认到账</button>' : '') +
+        '</div></td>';
+      tbody.appendChild(tr);
+    });
+  }
+  document.getElementById("payRows").addEventListener("click", async e => {
+    const btn = e.target.closest('[data-act="confirm"]');
+    if (!btn) return;
+    btn.closest("tr").classList.add("is-busy");
+    try {
+      await api.confirmPayment(btn.dataset.id);
+      btn.closest("tr").querySelector(".chip").outerHTML =
+        '<span class="chip" data-state="PAID"><i></i></span>';
+      btn.remove();
+      toast("回执已确认，T6 完成 · 单据转 PAID");
+      renderTiles(await api.metrics());
+    } catch (err) {
+      btn.closest("tr").classList.remove("is-busy");
+      toast("确认失败：" + err.message);
+    }
+  });
+
+  /* ---- 对账批次 + 差异 ---- */
+  function renderRecords(data){
+    const tbody = document.getElementById("recRows");
+    tbody.innerHTML = "";
+    data.records.forEach(r => {
+      const tr = document.createElement("tr");
+      tr.innerHTML =
+        '<td class="mono">#' + r.id + '</td>' +
+        '<td class="mono">' + r.bizDate + '</td>' +
+        '<td class="num">' + r.scannedCount + '</td>' +
+        '<td class="num"' + (r.diffCount > 0 ? ' style="color:var(--seal)"' : '') + '>' + r.diffCount + '</td>' +
+        '<td><span class="chip" data-state="' + r.status + '"><i></i></span></td>' +
+        '<td class="mut">' + (r.finishedAt || "—") + '</td>';
+      tbody.appendChild(tr);
+    });
+  }
+  function renderDiffs(data){
+    const tbody = document.getElementById("diffRows");
+    tbody.innerHTML = "";
+    document.getElementById("recEmpty").hidden = data.records.length > 0;
+    data.records.forEach(d => {
+      const tr = document.createElement("tr");
+      tr.innerHTML =
+        '<td class="mono">#' + d.id + '</td>' +
+        '<td class="mono">' + d.bizDate + '</td>' +
+        '<td>' + (DIFF_TYPE[d.diffType] || d.diffType) +
+          '<div class="mut" style="font-family:var(--mono);font-size:11px">' + d.diffType + '</div></td>' +
+        '<td class="mono">' + d.reportId + '</td>' +
+        '<td><span class="chip" data-state="' + d.status + '"><i></i></span></td>' +
+        '<td><div class="row-actions">' +
+          (d.status === "OPEN" ? '<button class="btn-seal btn-sm" data-act="repair" data-id="' + d.id + '">人工修复</button>' : '') +
+        '</div></td>';
+      tbody.appendChild(tr);
+    });
+  }
+  document.getElementById("diffRows").addEventListener("click", async e => {
+    const btn = e.target.closest('[data-act="repair"]');
+    if (!btn) return;
+    btn.closest("tr").classList.add("is-busy");
+    try {
+      await api.repair(btn.dataset.id);
+      btn.closest("tr").querySelector(".chip").outerHTML =
+        '<span class="chip" data-state="REPAIRED"><i></i></span>';
+      btn.remove();
+      toast("差异已修复（OPEN → REPAIRED）");
+      renderTiles(await api.metrics());
+    } catch (err) {
+      btn.closest("tr").classList.remove("is-busy");
+      toast("修复失败：" + err.message);
+    }
+  });
+  document.getElementById("runRecon").addEventListener("click", async e => {
+    const b = e.currentTarget;
+    b.disabled = true; b.textContent = "对账中…";
+    try {
+      await api.runReconcile();
+      renderRecords(await api.records());
+      renderDiffs(await api.diffs());
+      renderTiles(await api.metrics());
+      toast("对账完成，批次已刷新");
+    } catch (err) { toast("对账失败：" + err.message); }
+    b.disabled = false; b.textContent = "手动对账（T-1）";
+  });
+
+  /* ---- 区块切换 ---- */
+  function switchTab(pay){
+    document.getElementById("tabPay").setAttribute("aria-pressed", pay);
+    document.getElementById("tabRec").setAttribute("aria-pressed", String(!pay));
+    document.getElementById("panePay").hidden = !pay;
+    document.getElementById("paneRec").hidden = pay;
+  }
+  document.getElementById("tabPay").addEventListener("click", () => switchTab(true));
+  document.getElementById("tabRec").addEventListener("click", () => switchTab(false));
+
+  let toastTimer;
+  function toast(msg){
+    const t = document.getElementById("toast");
+    t.textContent = msg;
+    t.classList.add("on");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => t.classList.remove("on"), 2400);
+  }
+  document.getElementById("today").textContent =
+    new Date().toLocaleDateString("zh-CN", { year:"numeric", month:"long", day:"numeric", weekday:"long" });
+
+  requestAnimationFrame(() =>
+    document.querySelectorAll(".rise").forEach(el => el.classList.add("in")));
+
+  (async () => {
+    renderTiles(await api.metrics());
+    renderPayments(await api.payments());
+    renderRecords(await api.records());
+    renderDiffs(await api.diffs());
+  })();
+})();
+</script>
+</body>
+</html>
