@@ -1,0 +1,45 @@
+name: smart-expense
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: se-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: smart_expense
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+    ports:
+      # 本机 3306 已被本地 MySQL80 占用，这里映射到 3307
+      - "3307:3306"
+    volumes:
+      - se-mysql-data:/var/lib/mysql
+      # 首次启动自动执行建表与演示数据
+      - ../sql/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ../sql/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
+    healthcheck:
+      test: [ "CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot" ]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7
+    container_name: se-redis
+    restart: unless-stopped
+    ports:
+      - "6380:6379"
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: se-rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+
+volumes:
+  se-mysql-data:
