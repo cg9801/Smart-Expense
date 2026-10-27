@@ -28,6 +28,19 @@ spring:
         prefetch: 10
         default-requeue-rejected: false
 
+# AI 审批 Copilot（docs/11 §5）。API Key 只从环境变量读取，禁止写进仓库。
+ai:
+  provider: ${AI_PROVIDER:mock}          # mock / qwen
+  base-url: ${AI_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+  api-key: ${DASHSCOPE_API_KEY:}
+  text-model: ${AI_TEXT_MODEL:qwen-plus}
+  vl-model: ${AI_VL_MODEL:qwen-vl-max}
+  agent:
+    max-steps: 5
+    total-timeout-ms: 8000
+    step-timeout-ms: 3000
+    max-tool-result-bytes: 2048
+
 mybatis-plus:
   configuration:
     map-underscore-to-camel-case: true
