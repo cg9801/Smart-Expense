@@ -14,6 +14,12 @@ spring:
   jackson:
     date-format: yyyy-MM-dd HH:mm:ss
     time-zone: Asia/Shanghai
+  # 页面壳（templates/*.html）目前是纯客户端渲染，没有任何 th:* 绑定，
+  # 因此直接作为静态资源对外服务：省掉 Thymeleaf 依赖，页面与 /js /css 的绝对路径天然对齐。
+  # 将来真要用服务端渲染（th:*），删掉下面两行并把页面交给 ViewController 即可。
+  web:
+    resources:
+      static-locations: classpath:/static/,classpath:/templates/
   # RabbitMQ（docker-compose 映射 5672/15672），拓扑声明见 config/RabbitConfig.java
   rabbitmq:
     host: ${MQ_HOST:127.0.0.1}
