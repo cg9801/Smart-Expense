@@ -34,4 +34,17 @@ public class MetricsVO {
 
     /** 投递放弃的消息数（outbox_message.status = DEAD） */
     private long outboxDead;
+
+    /** AI 建议生成成功率 = status=SUCCESS ÷ 总建议行数，保留 2 位小数（docs/11 §9） */
+    private BigDecimal aiSuccessRate;
+
+    /** AI 建议采纳率 = adopted=1 ÷ adopted IS NOT NULL，保留 2 位小数；未表态不算忽略 */
+    private BigDecimal aiAdoptRate;
+
+    /** AI 建议平均延迟（毫秒），保留 1 位小数 */
+    private BigDecimal aiAvgLatencyMs;
+
+    /** Agent 平均步数，保留 1 位小数；越高说明取证越复杂、越费钱 */
+    private BigDecimal aiAvgSteps;
+
 }

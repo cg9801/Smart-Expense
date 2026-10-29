@@ -12,7 +12,13 @@ public interface AiReviewService {
     AiAdviceVO getAdvice(Long reportId);
 
     /**
-     * 异步消费入口：跑 Agent 并落库（幂等 uk_report_version）。
+     * MQ 消费者入口：消费日志幂等 + 跑 Agent + 落库。
+     * 与 runAgent 分开放，是为了把"消费日志 + 跑 Agent"放进同一个事务。
+     */
+    void consume(String msgId, String payloadJson);
+
+    /**
+     * 跑一次 Agent 并落库（幂等 uk_report_version）。
      *
      * @param reportId      单据 id
      * @param reportVersion 事件发生时的 version，用于过期判定与幂等

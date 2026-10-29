@@ -11,7 +11,7 @@ import org.springframework.stereotype.Component;
  * <p>当前骨架返回静态示例；后续可接入配置表或数据库。
  */
 @Component
-public class GetPolicyTool implements AiTool {
+public class   GetPolicyTool implements AiTool {
 
     @Override
     public String name() {

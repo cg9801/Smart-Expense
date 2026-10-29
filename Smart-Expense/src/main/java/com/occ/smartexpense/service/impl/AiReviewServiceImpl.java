@@ -1,33 +1,70 @@
 package com.occ.smartexpense.service.impl;
 
+import com.occ.smartexpense.ai.AgentLoop;
+import com.occ.smartexpense.ai.AiAdviceValidator;
 import com.occ.smartexpense.entity.AiReview;
 import com.occ.smartexpense.entity.ExpenseReport;
 import com.occ.smartexpense.mapper.AiReviewMapper;
 import com.occ.smartexpense.mapper.ExpenseReportMapper;
+import com.occ.smartexpense.mapper.MqConsumeLogMapper;
 import com.occ.smartexpense.service.AiReviewService;
 import com.occ.smartexpense.vo.AiAdviceVO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
- * AI 审批建议实现骨架，见 docs/11 §5。
- * 当前只实现读取与过期判定；Agent 运行逻辑留给 AgentLoop 实现后接入。
+ * AI 审批建议实现，见 docs/11-AI识别与辅助审核.md §5。
+ *
+ * <p>只写 ai_review；Agent 失败、超时、非法 JSON 都只影响本表，不影响审批。
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class AiReviewServiceImpl implements AiReviewService {
 
+    private static final String CONSUMER = "ai-review";
+    /** 低于该置信度的建议不展示：宁可不给建议，也不误导审批人（docs/11 §5.4） */
+    private static final BigDecimal MIN_DISPLAY_CONFIDENCE = new BigDecimal("0.60");
+    private final AiAdviceValidator adviceValidator;
     private final AiReviewMapper aiReviewMapper;
     private final ExpenseReportMapper reportMapper;
+    private final MqConsumeLogMapper consumeLogMapper;
+    private final AgentLoop agentLoop;
+    private final ObjectMapper objectMapper;
+
+    @Value("${ai.provider:mock}")
+    private String provider;
+
+    @Value("${ai.text-model:qwen-plus}")
+    private String textModel;
 
     @Override
     public AiAdviceVO getAdvice(Long reportId) {
         AiReview review = aiReviewMapper.selectLatestByReportId(reportId);
         if (review == null) {
             return null;   // 审批页显示"暂无 AI 建议"，不影响审批
+        }
+        if (!"SUCCESS".equals(review.getStatus())) {
+            return null;
+        }
+        // 低置信建议不展示：必须判 null（列允许为空），比较只能用 compareTo
+        if (review.getConfidence() != null
+                && review.getConfidence().compareTo(MIN_DISPLAY_CONFIDENCE) < 0) {
+            return null;
         }
         ExpenseReport report = reportMapper.selectById(reportId);
         AiAdviceVO vo = new AiAdviceVO();
@@ -37,14 +74,110 @@ public class AiReviewServiceImpl implements AiReviewService {
         return vo;
     }
 
+    /**
+     * 消费入口：消费日志与 Agent 落库同一事务，失败整体回滚，消息重投时可重新处理。
+     */
     @Override
+    @Transactional
+    public void consume(String msgId, String payloadJson) {
+        try {
+            consumeLogMapper.insert(msgId, CONSUMER);
+        } catch (DuplicateKeyException e) {
+            log.info("AI 审核消息重复，跳过 msgId={}", msgId);
+            return;
+        }
+        try {
+            JsonNode payload = objectMapper.readTree(payloadJson);
+            long reportId = payload.path("reportId").asLong(0);
+            long reportVersion = payload.path("reportVersion").asLong(0);
+            if (reportId <= 0 || reportVersion <= 0) {
+                log.warn("AI 审核事件缺少字段，丢弃 payload={}", payloadJson);
+                return;
+            }
+            runAgent(reportId, reportVersion);
+        } catch (Exception e) {
+            // 消费异常不往外抛：AI 失败不能进死信再重试，也不能阻塞业务
+            log.warn("AI 审核处理失败 msgId={}", msgId, e);
+        }
+    }
+
+    @Override
+    @Transactional
     public void runAgent(Long reportId, Long reportVersion) {
-        // TODO 1) 幂等：selectByReportVersion 已存在则直接返回
-        // TODO 2) 组装初始上下文（docs/11 §5.3）
-        // TODO 3) AgentLoop.run(context) → AgentResult
-        // TODO 4) 校验输出（Schema + evidence 白名单）→ 风险合并（只能升）
-        // TODO 5) 写 ai_review（uk_report_version 兜底）
-        throw new UnsupportedOperationException("runAgent 待实现，见 docs/11 §5.2/§5.9");
+        if (aiReviewMapper.selectByReportVersion(reportId, reportVersion) != null) {
+            return;   // 同一版本已算过，幂等
+        }
+        ExpenseReport report = reportMapper.selectById(reportId);
+        if (report == null) {
+            return;
+        }
+
+        AgentLoop.AgentResult result;
+        try {
+            result = agentLoop.run(buildContext(report));
+        } catch (Exception e) {
+            log.warn("Agent 执行异常 reportId={}", reportId, e);
+            result = new AgentLoop.AgentResult(null, 0, 0, 0, "AGENT_ERROR",0, Set.of());
+        }
+
+        AiReview review = new AiReview();
+        review.setReportId(reportId);
+        review.setReportVersion(reportVersion);
+        review.setModel("mock".equalsIgnoreCase(provider) ? "mock" : textModel);
+        review.setAgentSteps(result.steps());
+        review.setToolCalls(result.toolCalls());
+        review.setToolErrors(result.toolErrors());
+        review.setLatencyMs(Math.toIntExact(result.latencyMs()));
+        applyResult(review, result);
+
+        try {
+            aiReviewMapper.insert(review);
+        } catch (DuplicateKeyException e) {
+            log.info("AI 建议已存在，忽略 reportId={}, version={}", reportId, reportVersion);
+        }
+    }
+
+    /** 把 Agent 结果写到实体上：成功解析 final JSON，失败记 error */
+    private void applyResult(AiReview review, AgentLoop.AgentResult result) {
+        if (!result.success()) {
+            fail(review, result.error());
+            return;
+        }
+        try {
+            AiAdviceValidator.Verdict verdict = adviceValidator.validate(result.finalJson(), result.usedTools());
+            if (!verdict.valid()) {
+                log.info("AI 建议未通过校验 reportId={}, code={}", review.getReportId(), verdict.errorCode());
+                fail(review, verdict.errorCode());
+                return;
+            }
+            review.setRiskLevel(verdict.riskLevel());
+            review.setConfidence(verdict.confidence());
+            review.setAiReasons(verdict.reasonsJson());
+            review.setStatus("SUCCESS");
+        } catch (Exception e) {
+            log.warn("AI 建议校验异常 reportId={}", review.getReportId(), e);
+            fail(review, "VALIDATOR_ERROR");
+        }
+    }
+
+    /** 初始上下文：只给最小字段，其余由 Agent 调工具获取（docs/11 §5.3） */
+    private String buildContext(ExpenseReport report) {
+        Map<String, Object> context = new LinkedHashMap<>();
+        context.put("reportId", report.getId());
+        context.put("amountTotal", report.getAmountTotal() == null
+                ? "0.00" : report.getAmountTotal().toPlainString());
+        context.put("expenseType", report.getExpenseType());
+        context.put("deptId", report.getApplicantDeptId());
+        context.put("period", periodOf(report));
+        context.put("hardFindings", List.of());
+        return objectMapper.writeValueAsString(context);
+    }
+
+    private String periodOf(ExpenseReport report) {
+        if (report.getBudgetPeriod() != null && !report.getBudgetPeriod().isBlank()) {
+            return report.getBudgetPeriod();
+        }
+        return LocalDate.now().toString().substring(0, 7);
     }
 
     /** 单据版本变了说明建议过期：撤回改单重提后旧建议不能再展示 */
@@ -53,5 +186,11 @@ public class AiReviewServiceImpl implements AiReviewService {
             return false;
         }
         return review.getReportVersion().longValue() != report.getVersion().longValue();
+    }
+
+    private void fail(AiReview review, String errorCode) {
+        review.setStatus("FAILED");
+        review.setErrorMsg(errorCode);
+        review.setRiskLevel("LOW");
     }
 }

@@ -66,7 +66,7 @@ public class OutboxRelay {
     private void publish(OutboxMessage message){
         rabbitTemplate.convertAndSend(
                 RabbitConfig.REPORT_EXCHANGE,
-                RabbitConfig.REPORT_APPROVED_ROUTING_KEY,
+                routingKeyOf(message.getEventType()),
                 message.getPayload(),
                 m ->{
                     m.getMessageProperties().setMessageId(message.getMsgId());
@@ -75,6 +75,15 @@ public class OutboxRelay {
                     return m;
                 }
         );
+    }
+
+    /** 按事件类型选路由键：提交 → AI 审核队列，通过 → 付款队列（docs/11 §5.2） */
+    private String routingKeyOf(String eventType) {
+        return switch (eventType) {
+            case "REPORT_APPROVED" -> RabbitConfig.REPORT_APPROVED_ROUTING_KEY;
+            case "REPORT_SUBMITTED" -> RabbitConfig.REPORT_SUBMITTED_ROUTING_KEY;
+            default -> throw new IllegalArgumentException("未知事件类型: " + eventType);
+        };
     }
     private void markSent(OutboxMessage message){
         messageMapper.update(null, new LambdaUpdateWrapper<OutboxMessage>()

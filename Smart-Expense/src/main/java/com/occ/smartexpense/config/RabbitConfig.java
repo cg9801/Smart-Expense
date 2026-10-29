@@ -32,6 +32,12 @@ public class RabbitConfig {
     public static final String REPORT_APPROVED_QUEUE = "se.payment.queue";
     public static final String REPORT_APPROVED_ROUTING_KEY = "report.approved";
 
+    /** AI 审批 Copilot：提交事件 → 异步跑 Agent（docs/11 §5.2） */
+    public static final String REPORT_SUBMITTED_ROUTING_KEY = "report.submitted";
+    public static final String AI_REVIEW_QUEUE = "se.ai-review.queue";
+    public static final String AI_DLQ_QUEUE = "se.ai-review.dlq";
+    public static final String AI_DLQ_ROUTING_KEY = "ai-review.dead";
+
     public static final String DLX_EXCHANGE = "se.dlx.exchange";
     public static final String DLQ_QUEUE = "se.payment.dlq";
     public static final String DLQ_ROUTING_KEY = "payment.dead";
@@ -68,6 +74,30 @@ public class RabbitConfig {
     @Bean
     public Binding dlqBinding() {
         return BindingBuilder.bind(paymentDlq()).to(dlxExchange()).with(DLQ_ROUTING_KEY);
+    }
+
+    /** AI 审核队列：消费失败进自己的死信 */
+    @Bean
+    public Queue aiReviewQueue() {
+        return QueueBuilder.durable(AI_REVIEW_QUEUE)
+                .deadLetterExchange(DLX_EXCHANGE)
+                .deadLetterRoutingKey(AI_DLQ_ROUTING_KEY)
+                .build();
+    }
+
+    @Bean
+    public Queue aiReviewDlq() {
+        return QueueBuilder.durable(AI_DLQ_QUEUE).build();
+    }
+
+    @Bean
+    public Binding aiReviewBinding() {
+        return BindingBuilder.bind(aiReviewQueue()).to(reportExchange()).with(REPORT_SUBMITTED_ROUTING_KEY);
+    }
+
+    @Bean
+    public Binding aiReviewDlqBinding() {
+        return BindingBuilder.bind(aiReviewDlq()).to(dlxExchange()).with(AI_DLQ_ROUTING_KEY);
     }
 
     /**

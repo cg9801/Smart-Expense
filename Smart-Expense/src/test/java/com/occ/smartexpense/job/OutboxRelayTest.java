@@ -64,6 +64,8 @@ class OutboxRelayTest {
         OutboxMessage m = new OutboxMessage();
         m.setId(1L);
         m.setMsgId("uuid-1");
+        // 投递按事件类型选路由键，测试必须带上事件类型
+        m.setEventType("REPORT_APPROVED");
         m.setPayload("{\"reportId\":1}");
         m.setStatus("NEW");
         m.setRetryCount(0);

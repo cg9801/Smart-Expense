@@ -6,12 +6,14 @@ import tools.jackson.databind.ObjectMapper;
 import com.occ.smartexpense.common.BizException;
 import com.occ.smartexpense.common.ErrorCode;
 import com.occ.smartexpense.common.PageResult;
+import com.occ.smartexpense.entity.AiReview;
 import com.occ.smartexpense.entity.ExpenseApproval;
 import com.occ.smartexpense.entity.ExpenseReport;
 import com.occ.smartexpense.entity.ExpenseStatusLog;
 import com.occ.smartexpense.entity.SysUser;
 import com.occ.smartexpense.enums.ReportEvent;
 import com.occ.smartexpense.enums.ReportStatus;
+import com.occ.smartexpense.mapper.AiReviewMapper;
 import com.occ.smartexpense.mapper.ExpenseApprovalMapper;
 import com.occ.smartexpense.mapper.ExpenseReportMapper;
 import com.occ.smartexpense.mapper.ExpenseStatusLogMapper;
@@ -48,6 +50,8 @@ public class ApprovalServiceImpl implements ApprovalService {
     private final ExpenseApprovalMapper approvalMapper;
     private final ExpenseReportMapper reportMapper;
     private final ExpenseStatusLogMapper statusLogMapper;
+    /** 记录 AI 建议是否被采纳（docs/11 §5.7），只更新 adopted 列 */
+    private final AiReviewMapper aiReviewMapper;
     private final ReportStateMachine stateMachine;
     private final ReportService reportService;
     /** 驳回需要释放冻结（docs/06 §4.2） */
@@ -78,7 +82,7 @@ public class ApprovalServiceImpl implements ApprovalService {
 
     @Override
     @Transactional
-    public ReportDetailVO approve(Long approvalId, Long userId, String comment) {
+    public ReportDetailVO approve(Long approvalId, Long userId, String comment, Long aiReviewId, Boolean aiAdopted) {
         // 1–2 步：取节点 + 校验存在/归属/未处理（docs/05 §5.2）
         ExpenseApproval node = loadPendingNode(approvalId, userId);
 
@@ -150,15 +154,18 @@ public class ApprovalServiceImpl implements ApprovalService {
             appendReportApproved(report, now);
         }
 
+        // AI 建议采纳结果落 ai_review（未表态时两个参数都为 null，不更新）
+        markAdopted(node.getReportId(), aiReviewId, aiAdopted);
+
         // 审计永远最后写，中途失败才不会有假日志
         writeStatusLog(report.getId(), "APPROVE", report.getStatus(), to.name(),
-                userId, node.getApproverName(), stepDetail(node, null));
+                userId, node.getApproverName(), stepDetail(node, null, aiReviewId, aiAdopted));
         return reportService.getDetail(report.getId());
     }
 
     @Override
     @Transactional
-    public ReportDetailVO reject(Long approvalId, Long userId, String comment) {
+    public ReportDetailVO reject(Long approvalId, Long userId, String comment, Long aiReviewId, Boolean aiAdopted) {
         // 1 步：驳回意见必填（docs/05 §5.3）
         if (comment == null || comment.isBlank()) {
             throw new BizException(ErrorCode.PARAM_ERROR, "驳回必须填写审批意见");
@@ -209,9 +216,12 @@ public class ApprovalServiceImpl implements ApprovalService {
         // T5 副作用：释放冻结（docs/06 §4.2），与单据状态同事务
         budgetService.release(report);
 
+        // AI 建议采纳结果落 ai_review（未表态时不更新）
+        markAdopted(node.getReportId(), aiReviewId, aiAdopted);
+
         // 7 步：审计
         writeStatusLog(report.getId(), "REJECT", report.getStatus(), to.name(),
-                userId, node.getApproverName(), stepDetail(node, comment));
+                userId, node.getApproverName(), stepDetail(node, comment, aiReviewId, aiAdopted));
         return reportService.getDetail(report.getId());
     }
 
@@ -286,14 +296,31 @@ public class ApprovalServiceImpl implements ApprovalService {
         statusLogMapper.insert(log);
     }
 
-    private String stepDetail(ExpenseApproval node, String comment) {
+    private String stepDetail(ExpenseApproval node, String comment, Long aiReviewId, Boolean aiAdopted) {
         StringBuilder json = new StringBuilder()
                 .append("{\"stepNo\":").append(node.getStepNo())
                 .append(",\"approvalId\":").append(node.getId());
         if (comment != null) {
             json.append(",\"comment\":\"").append(escapeJson(comment)).append('"');
         }
+        if (aiReviewId != null) {
+            json.append(",\"aiReviewId\":").append(aiReviewId);
+        }
+        if (aiAdopted != null) {
+            json.append(",\"aiAdopted\":").append(aiAdopted);
+        }
         return json.append('}').toString();
+    }
+
+    /** 审批人采纳/忽略 AI 建议：只允许更新本单对应的那条建议 */
+    private void markAdopted(Long reportId, Long aiReviewId, Boolean aiAdopted) {
+        if (aiReviewId == null || aiAdopted == null) {
+            return;
+        }
+        aiReviewMapper.update(null, new LambdaUpdateWrapper<AiReview>()
+                .eq(AiReview::getId, aiReviewId)
+                .eq(AiReview::getReportId, reportId)
+                .set(AiReview::getAdopted, aiAdopted ? 1 : 0));
     }
 
     private String escapeJson(String raw) {

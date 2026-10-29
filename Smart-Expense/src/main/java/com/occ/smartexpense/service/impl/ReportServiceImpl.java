@@ -21,12 +21,15 @@ import com.occ.smartexpense.mapper.ExpenseReportMapper;
 import com.occ.smartexpense.mapper.ExpenseStatusLogMapper;
 import com.occ.smartexpense.mapper.SysDeptMapper;
 import com.occ.smartexpense.mapper.SysUserMapper;
+import com.occ.smartexpense.service.AiReviewService;
 import com.occ.smartexpense.service.BudgetService;
+import com.occ.smartexpense.service.OutboxService;
 import com.occ.smartexpense.service.ReportService;
 import com.occ.smartexpense.statemachine.ReportStateMachine;
 import com.occ.smartexpense.vo.ReportDetailVO;
 import com.occ.smartexpense.vo.ReportItemVO;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -45,6 +48,7 @@ import java.util.stream.Collectors;
  * 报销单业务实现：事务边界、金额校验、编号生成都在这一层。
  * 状态流转规则见 docs/02-状态机.md，所有状态判定统一委托 {@link ReportStateMachine}。
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class ReportServiceImpl implements ReportService {
@@ -66,6 +70,8 @@ public class ReportServiceImpl implements ReportService {
     private static final long FINANCE_SLA_HOURS = 24L;
     private static final long DIRECTOR_SLA_HOURS = 48L;
     private static final DateTimeFormatter REPORT_NO_TIME = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
+    /** 事件体时间格式，与 docs/07 §5 保持一致 */
+    private static final DateTimeFormatter EVENT_TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     private final ExpenseReportMapper reportMapper;
     private final ExpenseItemMapper itemMapper;
@@ -81,6 +87,10 @@ public class ReportServiceImpl implements ReportService {
     private final TransactionTemplate transactionTemplate;
     /** 预算冻结（T1 守卫③），见 docs/06-预算冻结与扣减.md */
     private final BudgetService budgetService;
+    /** 提交事件写 Outbox，交给 AI 审核消费者异步处理（docs/11 §5.2） */
+    private final OutboxService outboxService;
+    /** 详情里附带 AI 建议（只读，失败不影响主流程） */
+    private final AiReviewService aiReviewService;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -148,6 +158,12 @@ public class ReportServiceImpl implements ReportService {
                 .map(ReportEvent::name)
                 .toList());
         vo.setItems(items.stream().map(this::toItemVO).toList());
+        // AI 建议只读展示：查询失败也不影响详情与审批
+        try {
+            vo.setAiAdvice(aiReviewService.getAdvice(id));
+        } catch (Exception e) {
+            log.warn("读取 AI 建议失败 reportId={}", id, e);
+        }
         return vo;
     }
 
@@ -276,6 +292,16 @@ public class ReportServiceImpl implements ReportService {
             // 条件更新失败即并发冲突，整个事务回滚（docs/02 §6）
             throw new BizException(ErrorCode.STATE_ILLEGAL, "报销单状态已变化，请刷新后重试");
         }
+
+        // T1 副作用：写 AI 审核事件（与提交同事务，提交成功则消息必达）
+        outboxService.append("REPORT_SUBMITTED", "REPORT", report.getId(),
+                "{\"reportId\":" + report.getId()
+                        + ",\"reportVersion\":" + (report.getVersion() == null ? 1 : report.getVersion() + 1)
+                        + ",\"amountTotal\":\"" + (report.getAmountTotal() == null
+                        ? "0.00" : report.getAmountTotal().toPlainString())
+                        + "\",\"expenseType\":\"" + report.getExpenseType()
+                        + "\",\"deptId\":" + report.getApplicantDeptId()
+                        + ",\"submittedAt\":\"" + now.format(EVENT_TIME) + "\"}");
 
         writeStatusLog(report.getId(), traceId, ACTION_SUBMIT, STATUS_DRAFT, target.name(),
                 applicant.getId(), applicant.getRealName(), buildChainDetailJson(chain));
