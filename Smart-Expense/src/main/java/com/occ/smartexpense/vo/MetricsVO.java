@@ -47,4 +47,7 @@ public class MetricsVO {
     /** Agent 平均步数，保留 1 位小数；越高说明取证越复杂、越费钱 */
     private BigDecimal aiAvgSteps;
 
+    /** 工具调用成功率 = (tool_calls - tool_errors) ÷ tool_calls，保留 2 位小数 */
+    private BigDecimal aiToolSuccessRate;
+
 }

@@ -7,6 +7,7 @@ import com.occ.smartexpense.entity.AiReview;
 import com.occ.smartexpense.entity.DeptBudget;
 import com.occ.smartexpense.entity.ExpenseItem;
 import com.occ.smartexpense.entity.ExpenseReport;
+import com.occ.smartexpense.enums.ReportStatus;
 import com.occ.smartexpense.mapper.AiReviewMapper;
 import com.occ.smartexpense.mapper.DeptBudgetMapper;
 import com.occ.smartexpense.mapper.ExpenseItemMapper;
@@ -121,6 +122,12 @@ public class AiReviewServiceImpl implements AiReviewService {
         }
         ExpenseReport report = reportMapper.selectById(reportId);
         if (report == null) {
+            insertSkipped(reportId, reportVersion, "REPORT_NOT_FOUND");
+            return;
+        }
+        if (isFinished(report)) {
+            // 事件晚到（单据已通过/驳回/付款）：不消耗模型调用，留一行 SKIPPED 便于排查
+            insertSkipped(reportId, reportVersion, "REPORT_FINISHED");
             return;
         }
 
@@ -203,6 +210,31 @@ public class AiReviewServiceImpl implements AiReviewService {
         } catch (Exception e) {
             log.warn("硬规则序列化失败，按空数组落库", e);
             return "[]";
+        }
+    }
+
+    /** 单据已通过/驳回/付款：审批已结束，AI 建议没有意义（docs/11 §5.8） */
+    private boolean isFinished(ExpenseReport report) {
+        String status = report.getStatus();
+        return ReportStatus.APPROVED.name().equals(status)
+                || ReportStatus.REJECTED.name().equals(status)
+                || ReportStatus.PAID.name().equals(status);
+    }
+
+    /** 不消耗模型调用，但留一行痕迹，避免"为什么没有建议"无处可查 */
+    private void insertSkipped(Long reportId, Long reportVersion, String reason) {
+        AiReview review = new AiReview();
+        review.setReportId(reportId);
+        review.setReportVersion(reportVersion);
+        review.setRiskLevel("LOW");
+        review.setStatus("SKIPPED");
+        review.setErrorMsg(reason);
+        review.setModel("mock".equalsIgnoreCase(provider) ? "mock" : textModel);
+        review.setLatencyMs(0);
+        try {
+            aiReviewMapper.insert(review);
+        } catch (DuplicateKeyException e) {
+            log.info("AI 建议已存在，跳过 reportId={}, version={}", reportId, reportVersion);
         }
     }
 

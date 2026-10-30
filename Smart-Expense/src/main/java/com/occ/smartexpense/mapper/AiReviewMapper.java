@@ -33,7 +33,9 @@ public interface AiReviewMapper extends BaseMapper<AiReview> {
                    SUM(CASE WHEN adopted = 1 THEN 1 ELSE 0 END)         AS adopted_cnt,
                    SUM(CASE WHEN adopted IS NOT NULL THEN 1 ELSE 0 END) AS adopted_total,
                    AVG(latency_ms)                                      AS avg_latency_ms,
-                   AVG(agent_steps)                                     AS avg_steps
+                   AVG(agent_steps)                                     AS avg_steps,
+                   SUM(tool_calls)                                      AS tool_calls_sum,
+                   SUM(tool_errors)                                     AS tool_errors_sum
             FROM ai_review
             """)
     Map<String, Object> selectAiMetrics();

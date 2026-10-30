@@ -77,13 +77,16 @@ public class MetricsServiceImpl implements MetricsService {
         vo.setOutboxDead(outboxMessageMapper.selectCount(new LambdaQueryWrapper<OutboxMessage>()
                 .eq(OutboxMessage::getStatus, OUTBOX_DEAD)));
 
-        // ⑨ AI 指标：一条聚合 SQL 拿 6 个原始值，再在内存里算比率（docs/11 §9）
+        // ⑨ AI 指标：一条聚合 SQL 拿 8 个原始值，再在内存里算比率（docs/11 §9）
         Map<String, Object> ai = aiReviewMapper.selectAiMetrics();
         vo.setAiSuccessRate(ratio(longOf(ai, "success_cnt"), longOf(ai, "total_cnt")));
         // 分母只算"表过态"的建议：未表态既不算采纳也不算忽略
         vo.setAiAdoptRate(ratio(longOf(ai, "adopted_cnt"), longOf(ai, "adopted_total")));
         vo.setAiAvgLatencyMs(decimalOf(ai, "avg_latency_ms"));
         vo.setAiAvgSteps(decimalOf(ai, "avg_steps"));
+        // 工具调用成功率：分母是累计调用次数，没调用过时返回 0
+        long toolCalls = longOf(ai, "tool_calls_sum");
+        vo.setAiToolSuccessRate(ratio(toolCalls - longOf(ai, "tool_errors_sum"), toolCalls));
 
         return vo;
     }
