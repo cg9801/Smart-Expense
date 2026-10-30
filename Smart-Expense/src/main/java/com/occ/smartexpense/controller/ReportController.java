@@ -2,6 +2,7 @@ package com.occ.smartexpense.controller;
 
 import com.occ.smartexpense.common.Result;
 import com.occ.smartexpense.dto.ReportCreateDTO;
+import com.occ.smartexpense.security.UserContext;
 import com.occ.smartexpense.service.ReportService;
 import com.occ.smartexpense.vo.ReportDetailVO;
 import jakarta.validation.Valid;
@@ -32,6 +33,8 @@ public class ReportController {
 
     @GetMapping("/{id}")
     public Result<ReportDetailVO> getDetail(@PathVariable Long id) {
+        // 详情含金额、明细与审批链，必须登录后才能看（docs/12 §7）
+        UserContext.requireUserId();
         return Result.ok(reportService.getDetail(id));
     }
 
