@@ -37,7 +37,10 @@ public class ApprovalController {
         if (userId == null) {
             throw new BizException(ErrorCode.PARAM_ERROR, "缺少 X-User-Id");
         }
-        return Result.ok(approvalService.approve(approvalId, userId, body == null ? null : body.getComment()));
+        return Result.ok(approvalService.approve(approvalId, userId,
+                body == null ? null : body.getComment(),
+                body == null ? null : body.getAiReviewId(),
+                body == null ? null : body.getAiAdopted()));
     }
 
     @PostMapping("/{approvalId}/reject")
@@ -48,6 +51,9 @@ public class ApprovalController {
         if (userId == null) {
             throw new BizException(ErrorCode.PARAM_ERROR, "缺少 X-User-Id");
         }
-        return Result.ok(approvalService.reject(approvalId, userId, body == null ? null : body.getComment()));
+        return Result.ok(approvalService.reject(approvalId, userId,
+                body == null ? null : body.getComment(),
+                body == null ? null : body.getAiReviewId(),
+                body == null ? null : body.getAiAdopted()));
     }
 }

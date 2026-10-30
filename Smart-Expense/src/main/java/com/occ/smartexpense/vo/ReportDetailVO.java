@@ -40,4 +40,7 @@ public class ReportDetailVO {
     private List<String> availableActions;/** 允许的操作 **/
 
     private List<ReportItemVO> items;/** 支付类型 **/
+
+    /** AI 审批建议：缺失时为 null，前端显示"暂无 AI 建议"（docs/11 §5.7） */
+    private AiAdviceVO aiAdvice;/** AI 建议 **/
 }

@@ -306,3 +306,29 @@ CREATE TABLE reconcile_diff (
   UNIQUE KEY uk_date_type_report (biz_date, diff_type, report_id),
   KEY idx_status (status, biz_date)
 ) ENGINE=InnoDB COMMENT='对账差异';
+
+-- ------------------------------------------------------------
+-- 8. AI 审批 Copilot（见 docs/11 §6.1）
+-- ------------------------------------------------------------
+CREATE TABLE ai_review (
+  id             BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  report_id      BIGINT UNSIGNED NOT NULL,
+  report_version BIGINT UNSIGNED NOT NULL COMMENT '计算时的 expense_report.version，用于过期判定',
+  risk_level     VARCHAR(8)      NOT NULL DEFAULT 'LOW' COMMENT 'LOW/MEDIUM/HIGH（= max(硬规则, AI)）',
+  confidence     DECIMAL(4,3)    DEFAULT NULL COMMENT 'AI 自评置信度，<0.6 不建议展示',
+  ai_reasons     JSON            DEFAULT NULL COMMENT '模型 reasons（已过 evidence 白名单）',
+  hard_findings  JSON            DEFAULT NULL COMMENT '硬规则命中，AI 只能升不能降',
+  model          VARCHAR(64)     DEFAULT NULL,
+  prompt_version VARCHAR(16)     DEFAULT NULL COMMENT 'prompt 迭代对比用',
+  latency_ms     INT             DEFAULT NULL,
+  agent_steps    INT             DEFAULT NULL COMMENT 'Agent 循环的模型请求次数（<=5）',
+  tool_calls     INT             DEFAULT NULL COMMENT '工具调用总次数',
+  tool_errors    INT             DEFAULT NULL COMMENT '工具失败/拒绝次数',
+  status         VARCHAR(16)     NOT NULL DEFAULT 'SUCCESS' COMMENT 'SUCCESS/FAILED/SKIPPED/STALE',
+  adopted        TINYINT(1)      DEFAULT NULL COMMENT '1 采纳 / 0 忽略 / NULL 未表态',
+  error_msg      VARCHAR(512)    DEFAULT NULL,
+  created_at     DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_report_version (report_id, report_version),
+  KEY idx_report_created (report_id, created_at)
+) ENGINE=InnoDB COMMENT='AI 审批建议';
