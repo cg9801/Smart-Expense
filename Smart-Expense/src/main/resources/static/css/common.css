@@ -1,0 +1,320 @@
+/* ============================================================
+   Smart Expense · 共享设计系统（纸感凭证 × 朱砂印章）
+   三个页面（我的报销单 / 审批待办 / 运营管理台）共用；
+   report-submit.html 保持单文件，暂不引入本文件。
+   令牌取值与 report-submit.html :root 完全一致，改动需同步两处。
+   ============================================================ */
+
+/* ===== 1. 设计令牌 ===== */
+:root{
+  --paper:      #FBFAF7;
+  --paper-tint: #F3F1EA;
+  --ink:        #1B1A17;
+  --ink-2:      #57534A;
+  --ink-3:      #948E81;
+  --rule:       #DED9CC;
+  --rule-soft:  #EBE7DC;
+  --seal:       #B23A2E;
+  --seal-soft:  #F6E7E3;
+  --jade:       #35695C;
+  --jade-soft:  #EDF5F1;
+  --amber:      #A8761F;
+  --amber-soft: #FBF4E5;
+
+  --serif: "Songti SC","STSong","Noto Serif SC","Source Han Serif SC","SimSun",Georgia,serif;
+  --sans:  "PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,-apple-system,sans-serif;
+  --mono:  "JetBrains Mono","Cascadia Mono",ui-monospace,"SF Mono",Consolas,monospace;
+
+  --ease: cubic-bezier(.22,.68,.24,1);
+  --pop:  cubic-bezier(.34,1.4,.44,1);
+  --gut:  28px;
+}
+
+*,*::before,*::after{ box-sizing:border-box; }
+html{ -webkit-text-size-adjust:100%; }
+body{
+  margin:0;
+  min-height:100vh;
+  font-family:var(--sans);
+  font-size:15px;
+  line-height:1.6;
+  color:var(--ink);
+  background:
+    repeating-linear-gradient(to bottom, transparent 0 31px, rgba(222,217,204,.34) 31px 32px),
+    radial-gradient(120% 70% at 78% -10%, #FFFDF7 0%, rgba(255,253,247,0) 60%),
+    var(--paper);
+  background-attachment:fixed;
+  -webkit-font-smoothing:antialiased;
+}
+/* 纸纹颗粒，与提交页同源 */
+body::before{
+  content:"";
+  position:fixed; inset:0; z-index:0; pointer-events:none;
+  opacity:.055; mix-blend-mode:multiply;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.82' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+.wrap{ position:relative; z-index:1; max-width:1140px; margin:0 auto; padding:0 32px 96px; }
+
+/* ===== 2. 顶部导航（四页互通的骨架） ===== */
+.topnav{
+  position:sticky; top:0; z-index:30;
+  background:rgba(251,250,247,.92);
+  backdrop-filter:blur(6px);
+  border-bottom:1px solid var(--rule);
+}
+.topnav-in{
+  max-width:1140px; margin:0 auto; padding:0 32px;
+  display:flex; align-items:center; gap:30px; height:58px;
+}
+.brandmark{
+  display:flex; align-items:center; gap:10px; text-decoration:none; color:var(--ink);
+}
+.brandmark .sq{
+  width:26px; height:26px; border-radius:3px; background:var(--seal); color:#FBF4E3;
+  display:grid; place-items:center; font-family:var(--serif); font-size:14px; font-weight:600;
+  box-shadow:0 3px 8px -4px rgba(178,58,46,.7);
+}
+.brandmark b{ font-family:var(--serif); font-size:15px; letter-spacing:.14em; font-weight:600; }
+.tabs{ display:flex; gap:4px; flex:1; min-width:0; overflow-x:auto; scrollbar-width:none; }
+.tabs::-webkit-scrollbar{ display:none; }
+.tabs a{
+  flex:none; padding:6px 13px; border-radius:3px; text-decoration:none;
+  font-size:13.5px; letter-spacing:.1em; color:var(--ink-2);
+  border:1px solid transparent;
+  transition:color .18s var(--ease), background-color .18s var(--ease), border-color .18s var(--ease);
+}
+.tabs a:hover{ color:var(--ink); background:rgba(255,255,255,.75); border-color:var(--rule); }
+.tabs a[aria-current="page"]{
+  color:var(--seal); background:var(--seal-soft); border-color:#E8CFC8; font-weight:500;
+}
+/* 当前用户身份：接 JWT 前用它带 X-User-Id */
+.whoami{
+  flex:none; display:flex; align-items:center; gap:9px;
+  font-family:var(--mono); font-size:11px; letter-spacing:.1em; color:var(--ink-2);
+}
+.whoami select{
+  border:1px solid var(--rule); background:var(--paper); border-radius:2px;
+  padding:5px 6px; font-family:inherit; font-size:12px; color:var(--ink); cursor:pointer;
+}
+.whoami select:focus{ outline:none; border-color:var(--ink-3); }
+
+/* ===== 3. 报头与分区（同提交页语义） ===== */
+.masthead{
+  display:flex; align-items:flex-end; justify-content:space-between; gap:32px;
+  padding:44px 0 14px; border-bottom:2px solid var(--ink);
+}
+.masthead h1{
+  margin:0; font-family:var(--serif); font-weight:600;
+  font-size:clamp(24px,3vw,34px); letter-spacing:.16em; line-height:1.1;
+}
+.masthead .sub{
+  margin:6px 0 0; font-family:var(--mono); font-size:10.5px;
+  letter-spacing:.3em; text-transform:uppercase; color:var(--ink-3);
+}
+.masthead .meta{ text-align:right; flex:none; font-size:12px; color:var(--ink-3); letter-spacing:.08em; }
+
+.sec{ margin-top:38px; }
+.sec-head{ display:flex; align-items:center; gap:12px; margin-bottom:18px; }
+.sec-no{
+  font-family:var(--mono); font-size:11px; color:var(--seal);
+  border:1px solid currentColor; border-radius:2px; padding:1px 5px; letter-spacing:.06em;
+}
+.sec-head h2{ margin:0; font-family:var(--serif); font-size:16px; font-weight:600; letter-spacing:.2em; }
+.sec-head::after{ content:""; flex:1; height:1px; background:var(--rule-soft); }
+.sec-head .aside{ font-family:var(--mono); font-size:11px; color:var(--ink-3); letter-spacing:.08em; }
+
+/* ===== 4. 状态戳（data-state 取 ReportStatus / payment_order / reconcile_diff 注释里的枚举值） ===== */
+.chip{
+  display:inline-flex; align-items:center; gap:6px;
+  padding:2px 10px; border:1px solid var(--rule); border-radius:999px;
+  background:var(--paper-tint);
+  font-family:var(--mono); font-size:11px; letter-spacing:.12em; color:var(--ink-2);
+  white-space:nowrap;
+}
+.chip i{ width:6px; height:6px; border-radius:50%; background:var(--ink-3); flex:none; }
+.chip[data-state="DRAFT"]::after{ content:"草稿"; }
+.chip[data-state="PENDING"]::after{ content:"待审批"; }
+.chip[data-state="APPROVING"]::after{ content:"审批中"; }
+.chip[data-state="APPROVED"]::after{ content:"已通过"; }
+.chip[data-state="REJECTED"]::after{ content:"已驳回"; }
+.chip[data-state="PAID"]::after{ content:"已付款"; }
+.chip[data-state="CREATED"]::after{ content:"待付款"; }
+.chip[data-state="FAILED"]::after{ content:"失败"; }
+.chip[data-state="OPEN"]::after{ content:"待处理"; }
+.chip[data-state="REPAIRED"]::after{ content:"已修复"; }
+.chip[data-state="IGNORED"]::after{ content:"已忽略"; }
+.chip[data-state="RUNNING"]::after{ content:"进行中"; }
+.chip[data-state="DONE"]::after{ content:"完成"; }
+.chip[data-state="DRAFT"] i{ background:var(--ink-3); }
+.chip[data-state="PENDING"], .chip[data-state="APPROVING"],
+.chip[data-state="CREATED"], .chip[data-state="RUNNING"]{ color:var(--amber); border-color:#E7D7B6; background:var(--amber-soft); }
+.chip[data-state="PENDING"] i, .chip[data-state="APPROVING"] i,
+.chip[data-state="CREATED"] i, .chip[data-state="RUNNING"] i{ background:var(--amber); }
+.chip[data-state="APPROVED"], .chip[data-state="PAID"],
+.chip[data-state="REPAIRED"], .chip[data-state="DONE"]{ color:var(--jade); border-color:#CBDFD7; background:var(--jade-soft); }
+.chip[data-state="APPROVED"] i, .chip[data-state="PAID"] i,
+.chip[data-state="REPAIRED"] i, .chip[data-state="DONE"] i{ background:var(--jade); }
+.chip[data-state="REJECTED"], .chip[data-state="OPEN"], .chip[data-state="FAILED"]{
+  color:var(--seal); border-color:#E8CFC8; background:var(--seal-soft);
+}
+.chip[data-state="REJECTED"] i, .chip[data-state="OPEN"] i, .chip[data-state="FAILED"] i{ background:var(--seal); }
+
+/* ===== 5. 账簿式表格 ===== */
+.ledger{ width:100%; border-collapse:collapse; border-top:1px solid var(--ink); }
+.ledger th{
+  padding:9px 12px 8px; text-align:left;
+  font-family:var(--mono); font-weight:400; font-size:10px;
+  letter-spacing:.22em; text-transform:uppercase; color:var(--ink-3);
+  border-bottom:1px solid var(--rule); white-space:nowrap;
+}
+.ledger td{ padding:12px 12px; border-bottom:1px solid var(--rule-soft); font-size:14px; vertical-align:middle; }
+.ledger tbody tr{ transition:background-color .18s var(--ease); }
+.ledger tbody tr:hover{ background:rgba(255,255,255,.65); }
+.ledger .num{ font-family:var(--mono); font-variant-numeric:tabular-nums; text-align:right; }
+.ledger .mono{ font-family:var(--mono); font-size:12.5px; letter-spacing:.02em; color:var(--ink-2); }
+.ledger .mut{ color:var(--ink-3); font-size:12.5px; }
+.ledger .ta-r{ text-align:right; }
+/* 行内操作默认收着，hover 浮现——账面安静，动作在场 */
+.row-actions{ display:flex; gap:8px; justify-content:flex-end; opacity:.25; transition:opacity .18s var(--ease); }
+tr:hover .row-actions, .row-actions:focus-within{ opacity:1; }
+
+/* ===== 6. 按钮 ===== */
+.btn{
+  border:0; border-radius:3px; cursor:pointer; font-family:inherit;
+  padding:8px 16px; font-size:13.5px; letter-spacing:.12em;
+  background:var(--ink); color:var(--paper);
+  transition:background-color .2s var(--ease), transform .12s var(--pop), box-shadow .2s var(--ease);
+  box-shadow:0 6px 14px -10px rgba(27,26,23,.9);
+}
+.btn:hover:not(:disabled){ background:#000; }
+.btn:active:not(:disabled){ transform:scale(.96); }
+.btn:disabled{ cursor:default; background:var(--ink-3); box-shadow:none; }
+.btn-ghost{
+  border:1px solid var(--rule); border-radius:3px; background:transparent; cursor:pointer;
+  padding:7px 14px; font-family:inherit; font-size:13px; letter-spacing:.1em; color:var(--ink-2);
+  transition:border-color .18s, color .18s, background-color .18s, transform .12s var(--pop);
+}
+.btn-ghost:hover{ border-color:var(--ink-3); color:var(--ink); background:rgba(255,255,255,.7); }
+.btn-ghost:active{ transform:scale(.96); }
+.btn-seal{
+  border:1px solid var(--seal); border-radius:3px; background:transparent; cursor:pointer;
+  padding:7px 14px; font-family:inherit; font-size:13px; letter-spacing:.1em; color:var(--seal);
+  transition:background-color .18s, transform .12s var(--pop);
+}
+.btn-seal:hover{ background:var(--seal-soft); }
+.btn-seal:active{ transform:scale(.96); }
+.btn-sm{ padding:5px 11px; font-size:12.5px; }
+
+/* ===== 7. 指标瓦片（管理台） ===== */
+.tiles{ display:grid; grid-template-columns:repeat(auto-fit,minmax(168px,1fr)); gap:14px; }
+.tile{
+  border:1px solid var(--rule); border-radius:3px; background:rgba(255,255,255,.68);
+  box-shadow:0 1px 0 rgba(27,26,23,.03), 0 18px 34px -30px rgba(27,26,23,.4);
+  padding:16px 18px 15px;
+}
+.tile .cap{
+  font-family:var(--mono); font-size:10px; letter-spacing:.2em;
+  text-transform:uppercase; color:var(--ink-3);
+}
+.tile .val{
+  margin-top:9px; font-family:var(--mono); font-size:26px; line-height:1.1;
+  font-variant-numeric:tabular-nums;
+}
+.tile .note{ margin-top:6px; font-size:11.5px; color:var(--ink-3); letter-spacing:.04em; }
+.tile[data-tone="seal"] .val{ color:var(--seal); }
+.tile[data-tone="jade"] .val{ color:var(--jade); }
+.tile[data-tone="amber"] .val{ color:var(--amber); }
+
+/* ===== 8. 筛选标签 ===== */
+.filter-tabs{ display:flex; gap:6px; flex-wrap:wrap; }
+.filter-tabs button{
+  border:1px solid var(--rule); background:transparent; border-radius:999px;
+  padding:5px 14px; font-family:inherit; font-size:12.5px; letter-spacing:.08em; color:var(--ink-2);
+  cursor:pointer; transition:all .18s var(--ease);
+}
+.filter-tabs button:hover{ border-color:var(--ink-3); color:var(--ink); }
+.filter-tabs button[aria-pressed="true"]{
+  background:var(--ink); color:var(--paper); border-color:var(--ink);
+}
+
+/* ===== 9. 审批卡片（待办页用：一行一单，动作常驻） ===== */
+.todo{
+  display:grid; grid-template-columns:minmax(0,1fr) auto; gap:14px 26px; align-items:center;
+  border:1px solid var(--rule); border-left:3px solid var(--amber); border-radius:3px;
+  background:rgba(255,255,255,.68);
+  box-shadow:0 1px 0 rgba(27,26,23,.03), 0 18px 34px -30px rgba(27,26,23,.4);
+  padding:16px 20px; margin-bottom:14px;
+  transition:border-color .2s var(--ease), transform .15s var(--ease);
+}
+.todo:hover{ transform:translateY(-1px); border-left-color:var(--seal); }
+.todo .top{ display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; min-width:0; }
+.todo .no{ font-family:var(--mono); font-size:12px; letter-spacing:.06em; color:var(--ink-3); }
+.todo .title{ font-size:15px; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.todo .sub{ display:flex; gap:16px; flex-wrap:wrap; font-size:12.5px; color:var(--ink-2); margin-top:5px; }
+.todo .sub b{ font-weight:500; color:var(--ink); }
+.todo .amt{ font-family:var(--mono); font-size:22px; font-variant-numeric:tabular-nums; }
+.todo .due{ font-family:var(--mono); font-size:11px; letter-spacing:.06em; color:var(--ink-3); margin-top:3px; text-align:right; }
+.todo .due.is-late{ color:var(--seal); }
+.todo .ops{ display:flex; gap:10px; margin-top:12px; grid-column:1 / -1; }
+
+/* ===== 10. 对话框 / 提示条 ===== */
+.overlay{
+  position:fixed; inset:0; z-index:40; display:none;
+  place-items:center; background:rgba(27,26,23,.32); backdrop-filter:blur(2px);
+}
+.overlay.on{ display:grid; }
+.dialog{
+  width:min(440px, calc(100vw - 48px));
+  background:var(--paper); border:1px solid var(--rule); border-radius:4px;
+  box-shadow:0 30px 60px -30px rgba(27,26,23,.55);
+  padding:24px 26px;
+  animation:pop .28s var(--pop);
+}
+@keyframes pop{ from{ opacity:0; transform:scale(.94) translateY(8px); } }
+.dialog h3{ margin:0; font-family:var(--serif); font-size:17px; letter-spacing:.14em; font-weight:600; }
+.dialog p{ margin:10px 0 0; font-size:13px; color:var(--ink-2); }
+.dialog .fld{ margin-top:16px; }
+.dialog textarea{
+  width:100%; border:0; border-bottom:1px solid var(--rule); background:transparent;
+  padding:6px 2px 8px; font-family:inherit; font-size:14px; resize:vertical; min-height:64px; color:var(--ink);
+}
+.dialog textarea:focus{ outline:none; border-color:var(--ink); }
+.dialog .ops{ display:flex; justify-content:flex-end; gap:10px; margin-top:22px; }
+
+.toast{
+  position:fixed; left:50%; bottom:34px; z-index:50; transform:translate(-50%, 16px);
+  background:var(--ink); color:var(--paper); border-radius:3px;
+  padding:10px 18px; font-size:13px; letter-spacing:.06em;
+  opacity:0; pointer-events:none;
+  transition:opacity .22s var(--ease), transform .22s var(--ease);
+}
+.toast.on{ opacity:1; transform:translate(-50%, 0); }
+
+/* ===== 11. 空态 / 分页 ===== */
+.empty{
+  border:1px dashed var(--rule); border-radius:3px; padding:38px 20px;
+  text-align:center; color:var(--ink-3); font-size:13px; letter-spacing:.1em;
+}
+.pager{ display:flex; align-items:center; justify-content:flex-end; gap:14px; margin-top:16px; }
+.pager .info{ font-family:var(--mono); font-size:11px; color:var(--ink-3); letter-spacing:.1em; }
+
+/* ===== 12. 进场动效 ===== */
+.rise{ opacity:0; transform:translateY(13px); }
+.rise.in{ opacity:1; transform:none; transition:opacity .62s var(--ease), transform .62s var(--ease); transition-delay:var(--d,0ms); }
+
+/* ===== 13. 响应式与可访问性 ===== */
+@media (max-width:860px){
+  .wrap{ padding:0 18px 70px; }
+  .topnav-in{ padding:0 18px; gap:14px; }
+  .whoami .lb{ display:none; }
+  .masthead{ flex-direction:column; align-items:flex-start; gap:12px; padding-top:30px; }
+  .masthead .meta{ text-align:left; }
+  .ledger th:nth-child(n+5), .ledger td:nth-child(n+5){ display:none; } /* 窄屏先保单号/标题/金额/状态 */
+  .todo{ grid-template-columns:1fr; }
+  .todo .due{ text-align:left; }
+}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{ animation-duration:.001ms !important; transition-duration:.001ms !important; }
+  .rise{ opacity:1; transform:none; }
+}

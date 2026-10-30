@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<!--
+  审批待办 · 审批页（前端原型）
+  ---------------------------------------------------------------
+  纯静态原型：浏览器直接打开即可预览，数据来自脚本顶部 MOCK。
+  对应接口（docs/03-接口清单.md §2.3，均已实现）：
+    GET  /api/v1/approvals/pending                  → 我的待办，按 deadline_at 升序
+    POST /api/v1/approvals/{approvalId}/approve     → 通过（comment 可选；会签未批完返回 stepPassed:false）
+    POST /api/v1/approvals/{approvalId}/reject      → 驳回（comment 必填）
+  身份用 X-User-Id 头（右上角切换），接后端时把 USE_MOCK 改为 false。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>审批待办 · Smart Expense</title>
+<link rel="stylesheet" href="/css/common.css" />
+<style>
+  /* 本页专属：通过后短暂高亮再离场 */
+  .todo.is-done{ border-left-color:var(--jade); }
+  .todo.is-done .done-mark{ color:var(--jade); }
+  .todo .done-mark{ font-family:var(--mono); font-size:11px; letter-spacing:.14em; }
+  .todo.leaving{ transition:opacity .4s var(--ease), transform .4s var(--ease); opacity:0; transform:translateY(-8px); }
+  .count-bubble{ font-family:var(--mono); font-size:11px; color:var(--seal); border:1px solid currentColor; border-radius:2px; padding:0 5px; }
+  .todo.is-busy{ opacity:.55; pointer-events:none; }
+</style>
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="topnav-in">
+    <a class="brandmark" href="/report-list.html"><span class="sq">支</span><b>Smart Expense</b></a>
+    <div class="tabs">
+      <a href="/report-list.html">我的报销单</a>
+      <a href="/report-submit.html">新建报销单</a>
+      <a href="/approval-todo.html" aria-current="page">审批待办</a>
+      <a href="/admin-console.html">运营管理台</a>
+    </div>
+    <div class="whoami">
+      <span class="lb">当前身份</span>
+      <select id="whoami" title="JWT 接入前的临时身份，请求以 X-User-Id 头携带"></select>
+    </div>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <header class="masthead rise">
+    <div>
+      <h1>审批待办</h1>
+      <p class="sub">Approval Queue&nbsp;&nbsp;·&nbsp;&nbsp;Sorted by deadline</p>
+    </div>
+    <div class="meta" id="today">—</div>
+  </header>
+
+  <section class="sec rise" style="--d:100ms">
+    <div class="sec-head">
+      <span class="sec-no">01</span><h2>待我处理</h2>
+      <span class="aside" style="margin-left:auto"><span class="count-bubble" id="count">0</span>&nbsp;笔 · 逾期在最前</span>
+    </div>
+    <div id="list"></div>
+    <div id="empty" class="empty" hidden>太好了，没有待办。盖章休息一下。</div>
+  </section>
+</div>
+
+<!-- 意见输入：通过时可选，驳回时必填（docs/03 §2.3） -->
+<div class="overlay" id="dlg">
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dlgTitle">
+    <h3 id="dlgTitle">通过</h3>
+    <p id="dlgText"></p>
+    <div class="fld">
+      <textarea id="dlgComment" placeholder="审批意见（驳回时必填）"></textarea>
+    </div>
+    <div class="ops">
+      <button class="btn-ghost" id="dlgCancel">取消</button>
+      <button class="btn" id="dlgOk">确认</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(function(){
+  "use strict";
+
+  /* ---- 身份：切换后重拉待办，不同审批人看到不同队列 ---- */
+  const USERS = [
+    { id: 1001, name: "栀麦（员工）" },
+    { id: 1002, name: "陈砚（主管）" },
+    { id: 1003, name: "林知夏（财务）" },
+    { id: 1004, name: "周叙白（总监）" },
+    { id: 1005, name: "admin（管理员）" }
+  ];
+  const whoSel = document.getElementById("whoami");
+  USERS.forEach(u => {
+    const o = document.createElement("option");
+    o.value = u.id; o.textContent = u.name;
+    whoSel.appendChild(o);
+  });
+  whoSel.value = localStorage.getItem("se.uid") || USERS[1].id;
+  whoSel.addEventListener("change", () => {
+    localStorage.setItem("se.uid", whoSel.value);
+    load();
+  });
+  const uid = () => localStorage.getItem("se.uid") || USERS[1].id;
+
+  /* ---- 演示数据：字段名与 ApprovalTodoVO 一致（含会签步骤） ---- */
+  const MOCK = {
+    total: 3,
+    records: [
+      { approvalId: 9001, reportId: 1007, reportNo: "EXP20261027-0007", title: "杭州客户拜访差旅",
+        applicantName: "栀麦", amountTotal: 1508.00, stepNo: 1, stepName: "直属主管 · 会签", deadlineAt: "2026-10-28 18:00:00", status: "PENDING" },
+      { approvalId: 8996, reportId: 1004, reportNo: "EXP20261026-0005", title: "十月办公用品采购",
+        applicantName: "栀麦", amountTotal: 73.50, stepNo: 2, stepName: "财务复核 · 或签", deadlineAt: "2026-10-26 18:00:00", status: "PENDING" },
+      { approvalId: 8990, reportId: 1001, reportNo: "EXP20261024-0003", title: "云服务年度续费分摊",
+        applicantName: "陈砚", amountTotal: 4800.00, stepNo: 2, stepName: "财务复核 · 会签", deadlineAt: "2026-10-25 18:00:00", status: "PENDING" }
+    ]
+  };
+
+  /* ---- API 层：USE_MOCK=false 即走真实接口（见 docs/03 §2.3） ---- */
+  const USE_MOCK = true;
+  async function listPending(){
+    if (USE_MOCK) return MOCK;
+    const res = await fetch("/api/v1/approvals/pending?page=1&size=20", { headers:{ "X-User-Id": uid() } });
+    return (await res.json()).data;
+  }
+  async function act(approvalId, action, comment){
+    if (USE_MOCK) return { reportStatus: "APPROVING", currentStep: 2, stepPassed: true };
+    const res = await fetch("/api/v1/approvals/" + approvalId + "/" + action, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-User-Id": uid() },
+      body: JSON.stringify({ comment: comment || null })
+    });
+    const body = await res.json();
+    if (body.code !== 0) throw new Error(body.message);
+    return body.data;
+  }
+
+  /* ---- 渲染 ---- */
+  const fmt = n => Number(n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  const listEl = document.getElementById("list");
+
+  function dueText(deadlineStr){
+    const due = new Date(deadlineStr.replace(" ", "T"));
+    const diff = due - Date.now();
+    if (diff < 0) return { text: "已逾期 " + fmtDur(-diff), late: true };
+    return { text: "剩余 " + fmtDur(diff), late: false };
+  }
+  function fmtDur(ms){
+    const h = Math.floor(ms / 3600000);
+    if (h < 24) return h + " 小时 " + Math.floor(ms % 3600000 / 60000) + " 分";
+    return Math.floor(h / 24) + " 天 " + h % 24 + " 小时";
+  }
+
+  function render(data){
+    listEl.innerHTML = "";
+    document.getElementById("empty").hidden = data.records.length > 0;
+    document.getElementById("count").textContent = data.records.length;
+    data.records.forEach(t => {
+      const due = dueText(t.deadlineAt);
+      const card = document.createElement("div");
+      card.className = "todo rise in";
+      card.dataset.approvalId = t.approvalId;
+      card.innerHTML =
+        '<div>' +
+          '<div class="top">' +
+            '<span class="no">' + t.reportNo + '</span>' +
+            '<span class="title">' + t.title + '</span>' +
+          '</div>' +
+          '<div class="sub">' +
+            '<span>申请人 <b>' + t.applicantName + '</b></span>' +
+            '<span>步骤 <b>STEP ' + t.stepNo + ' · ' + t.stepName + '</b></span>' +
+          '</div>' +
+        '</div>' +
+        '<div>' +
+          '<div class="amt">¥' + fmt(t.amountTotal) + '</div>' +
+          '<div class="due' + (due.late ? ' is-late' : '') + '">' + due.text + '</div>' +
+        '</div>' +
+        '<div class="ops">' +
+          '<button class="btn btn-sm" data-act="approve">通 过</button>' +
+          '<button class="btn-seal btn-sm" data-act="reject">驳 回</button>' +
+        '</div>';
+      listEl.appendChild(card);
+    });
+  }
+
+  /* ---- 意见对话框：驳回 comment 必填在前端先拦一道，服务端仍会校验 ---- */
+  let pending = null;   // { approvalId, action }
+  listEl.addEventListener("click", e => {
+    const btn = e.target.closest("[data-act]");
+    if (!btn) return;
+    const card = btn.closest(".todo");
+    pending = {
+      approvalId: card.dataset.approvalId,
+      action: btn.dataset.act,
+      card
+    };
+    const rejecting = pending.action === "reject";
+    document.getElementById("dlgTitle").textContent = rejecting ? "驳回" : "通过";
+    document.getElementById("dlgText").textContent = rejecting
+      ? "驳回后单据退回申请人，可修改后重新提交。"
+      : "会签场景下同级还有未批完的节点时，单据会停在当前步骤（stepPassed=false）。";
+    document.getElementById("dlgComment").value = "";
+    document.getElementById("dlgComment").placeholder = rejecting ? "驳回理由（必填）" : "审批意见（选填）";
+    document.getElementById("dlgOk").classList.toggle("btn", !rejecting);
+    document.getElementById("dlgOk").classList.toggle("btn-seal", rejecting);
+    document.getElementById("dlg").classList.add("on");
+  });
+  document.getElementById("dlgCancel").addEventListener("click", () =>
+    document.getElementById("dlg").classList.remove("on"));
+  document.getElementById("dlgOk").addEventListener("click", async () => {
+    const comment = document.getElementById("dlgComment").value.trim();
+    if (pending.action === "reject" && !comment){
+      toast("驳回必须填写理由");
+      return;
+    }
+    document.getElementById("dlg").classList.remove("on");
+    pending.card.classList.add("is-busy");
+    try {
+      const r = await act(pending.approvalId, pending.action, comment);
+      pending.card.classList.add("is-done");
+      pending.card.querySelector(".ops").innerHTML =
+        '<span class="done-mark">' + (pending.action === "approve" && !r.stepPassed
+          ? "已通过 · 会签未完（STEP " + r.currentStep + "）"
+          : "已" + (pending.action === "approve" ? "通过" : "驳回")) + '</span>';
+      setTimeout(() => {
+        pending.card.classList.add("leaving");
+        setTimeout(() => { pending.card.remove(); bumpCount(-1); }, 420);
+      }, 1100);
+      toast("已" + (pending.action === "approve" ? "通过" : "驳回"));
+    } catch (err) {
+      pending.card.classList.remove("is-busy");
+      toast("操作失败：" + err.message);
+    }
+  });
+
+  function bumpCount(d){
+    const c = document.getElementById("count");
+    c.textContent = Math.max(0, parseInt(c.textContent, 10) + d);
+  }
+
+  async function load(){ render(await listPending()); }
+
+  let toastTimer;
+  function toast(msg){
+    const t = document.getElementById("toast");
+    t.textContent = msg;
+    t.classList.add("on");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => t.classList.remove("on"), 2400);
+  }
+  document.getElementById("today").textContent =
+    new Date().toLocaleDateString("zh-CN", { year:"numeric", month:"long", day:"numeric", weekday:"long" });
+
+  requestAnimationFrame(() =>
+    document.querySelectorAll(".rise").forEach(el => el.classList.add("in")));
+  load();
+})();
+</script>
+</body>
+</html>

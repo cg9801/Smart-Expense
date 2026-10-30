@@ -1,0 +1,725 @@
+<!DOCTYPE html>
+<!--
+  费用报销单 · 提交页（前端原型）
+  ---------------------------------------------------------------
+  当前是纯静态页面，浏览器可直接打开预览，零依赖、零构建。
+  接后端时只需两处改动：
+    1. 移到 templates/ 下（已在此目录），给动态处加 th:*，由 ReportController 渲染；
+    2. 把 <script> 里的 MOCK 数据换成接口返回值：
+       GET  /api/v1/reports/{id}   → 明细 + availableActions + 审批链
+       POST /api/v1/reports        → 建草稿
+       POST /api/v1/reports/{id}/submit  → 提交（需 Idempotency-Key 头）
+  设计：纸感凭证 × 朱砂印章。无框架、无外链字体，靠系统字体栈还原"财务公文"气质。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>费用报销单 · Smart Expense</title>
+<style>
+  /* ===== 1. 设计令牌 ===== */
+  :root{
+    --paper:      #FBFAF7;
+    --paper-tint: #F3F1EA;
+    --ink:        #1B1A17;
+    --ink-2:      #57534A;
+    --ink-3:      #948E81;
+    --rule:       #DED9CC;
+    --rule-soft:  #EBE7DC;
+    --seal:       #B23A2E;
+    --seal-soft:  #F6E7E3;
+    --jade:       #35695C;
+    --amber:      #A8761F;
+
+    --serif: "Songti SC","STSong","Noto Serif SC","Source Han Serif SC","SimSun",Georgia,serif;
+    --sans:  "PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,-apple-system,sans-serif;
+    --mono:  "JetBrains Mono","Cascadia Mono",ui-monospace,"SF Mono",Consolas,monospace;
+
+    --ease:  cubic-bezier(.22,.68,.24,1);
+    --pop:   cubic-bezier(.34,1.4,.44,1);
+    --gut:   28px;
+  }
+
+  *,*::before,*::after{ box-sizing:border-box; }
+
+  html{ -webkit-text-size-adjust:100%; }
+  body{
+    margin:0;
+    min-height:100vh;
+    font-family:var(--sans);
+    font-size:15px;
+    line-height:1.6;
+    color:var(--ink);
+    background:
+      repeating-linear-gradient(to bottom, transparent 0 31px, rgba(222,217,204,.34) 31px 32px),
+      radial-gradient(120% 70% at 78% -10%, #FFFDF7 0%, rgba(255,253,247,0) 60%),
+      var(--paper);
+    background-attachment:fixed;
+    -webkit-font-smoothing:antialiased;
+  }
+  /* 纸纹颗粒：叠一层 multiply 噪点，让纯色底有纤维感 */
+  body::before{
+    content:"";
+    position:fixed; inset:0; z-index:0; pointer-events:none;
+    opacity:.055; mix-blend-mode:multiply;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.82' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+
+  /* ===== 2. 版心 ===== */
+  .wrap{ position:relative; z-index:1; max-width:1140px; margin:0 auto; padding:52px 32px 96px; }
+
+  /* 报头 */
+  .masthead{
+    display:flex; align-items:flex-end; justify-content:space-between; gap:32px;
+    padding-bottom:14px; border-bottom:2px solid var(--ink);
+  }
+  .brand h1{
+    margin:0; font-family:var(--serif); font-weight:600;
+    font-size:clamp(26px,3.4vw,38px); letter-spacing:.16em; line-height:1.1;
+  }
+  .brand p{
+    margin:6px 0 0; font-family:var(--mono); font-size:10.5px;
+    letter-spacing:.34em; text-transform:uppercase; color:var(--ink-3);
+  }
+  .doc-meta{ text-align:right; flex:none; }
+  .doc-no{
+    font-family:var(--mono); font-size:13px; letter-spacing:.08em; color:var(--ink-2);
+    border-bottom:1px dotted var(--rule); padding-bottom:2px;
+  }
+  .doc-date{ margin-top:7px; font-size:12px; color:var(--ink-3); letter-spacing:.08em; }
+
+  /* 状态戳 */
+  .status{
+    display:inline-flex; align-items:center; gap:7px; margin-top:11px;
+    padding:4px 11px 4px 9px; border:1px solid var(--rule);
+    border-radius:999px; background:var(--paper-tint);
+    font-size:11.5px; letter-spacing:.14em; color:var(--ink-2);
+  }
+  .status i{ width:6px; height:6px; border-radius:50%; background:var(--amber); flex:none; }
+  .status[data-state="PENDING"]{ color:var(--amber); border-color:#E7D7B6; background:#FBF4E5; }
+  .status[data-state="PENDING"] i{ background:var(--amber); }
+  .status[data-state="DRAFT"]   i{ background:var(--ink-3); }
+  .status[data-state="APPROVED"]{ color:var(--jade); border-color:#CBDFD7; background:#EDF5F1; }
+  .status[data-state="APPROVED"] i{ background:var(--jade); }
+
+  /* 三栏骨架：内容 / 汇总 */
+  .sheet{ display:grid; grid-template-columns:minmax(0,1fr) 318px; gap:56px; margin-top:44px; }
+
+  /* ===== 3. 分区标题 ===== */
+  .sec{ margin-bottom:44px; }
+  .sec-head{ display:flex; align-items:center; gap:12px; margin-bottom:20px; }
+  .sec-no{
+    font-family:var(--mono); font-size:11px; color:var(--seal);
+    border:1px solid currentColor; border-radius:2px; padding:1px 5px; letter-spacing:.06em;
+  }
+  .sec-head h2{
+    margin:0; font-family:var(--serif); font-size:16px; font-weight:600; letter-spacing:.2em;
+  }
+  .sec-head::after{ content:""; flex:1; height:1px; background:var(--rule-soft); }
+
+  /* ===== 4. 字段（纸面表单：只用底线） ===== */
+  .fields{ display:grid; grid-template-columns:1fr 1fr; gap:26px var(--gut); }
+  .field{ position:relative; }
+  .field label{
+    display:block; margin-bottom:7px; font-size:11.5px; letter-spacing:.16em;
+    color:var(--ink-3); transition:color .18s var(--ease);
+  }
+  .field:focus-within label{ color:var(--seal); }
+  .ctl{
+    width:100%; border:0; border-bottom:1px solid var(--rule); background:transparent;
+    padding:6px 2px 8px; font-family:inherit; font-size:15px; color:var(--ink);
+    border-radius:0; transition:border-color .18s var(--ease);
+  }
+  .ctl:hover{ border-color:var(--ink-3); }
+  .ctl:focus{ outline:none; border-color:var(--ink); }
+  .ctl::placeholder{ color:#BEB9AC; }
+  /* 聚焦时底部墨线从中间展开 */
+  .field::after{
+    content:""; position:absolute; left:50%; right:50%; bottom:0; height:2px;
+    background:var(--seal); transition:left .26s var(--ease), right .26s var(--ease);
+  }
+  .field:focus-within::after{ left:0; right:0; }
+  select.ctl{ appearance:none; cursor:pointer; padding-right:20px; }
+  .field.select::before{
+    content:""; position:absolute; right:4px; bottom:15px; width:6px; height:6px;
+    border-right:1.4px solid var(--ink-3); border-bottom:1.4px solid var(--ink-3);
+    transform:rotate(45deg) translateY(-2px); pointer-events:none;
+  }
+
+  /* ===== 5. 费用明细表 ===== */
+  .items{ border-top:1px solid var(--ink); }
+  .items-head, .item-row{
+    display:grid;
+    grid-template-columns:134px 120px minmax(0,1fr) 132px 34px;
+    gap:0 16px; align-items:center;
+  }
+  .items-head{ padding:9px 0 8px; border-bottom:1px solid var(--rule); }
+  .items-head span{
+    font-family:var(--mono); font-size:10px; letter-spacing:.22em;
+    text-transform:uppercase; color:var(--ink-3);
+  }
+  .items-head .ta-r{ text-align:right; }
+
+  .item-row{
+    position:relative; padding:8px 0; border-bottom:1px solid var(--rule-soft);
+    transition:background-color .2s var(--ease);
+  }
+  .item-row:hover{ background:rgba(255,255,255,.6); }
+  .item-row .c{ position:relative; min-width:0; }
+  .item-row .ctl{ font-size:14px; padding:5px 2px 7px; }
+  .item-row .c:not(.c-del):not(.c-amt)::after{
+    content:""; position:absolute; left:50%; right:50%; bottom:0; height:1.5px;
+    background:var(--seal); transition:left .24s var(--ease), right .24s var(--ease);
+  }
+  .item-row .c:not(.c-del):not(.c-amt):focus-within::after{ left:0; right:0; }
+
+  .amt-box{ display:flex; align-items:baseline; gap:4px; border-bottom:1px solid var(--rule); transition:border-color .2s var(--ease); }
+  .c-amt:focus-within .amt-box{ border-color:var(--ink); }
+  .amt-box .cur{ font-family:var(--mono); font-size:12px; color:var(--ink-3); }
+  .amt-box .ctl{ border:0; text-align:right; font-family:var(--mono); font-size:15px; letter-spacing:.02em; }
+  .amt-box .ctl:focus{ border:0; }
+
+  /* 行删除：默认隐身，hover 才浮现 */
+  .row-del{
+    width:26px; height:26px; border:0; border-radius:2px; background:transparent;
+    color:var(--ink-3); cursor:pointer; font-size:15px; line-height:1;
+    opacity:0; transform:translateX(-3px);
+    transition:opacity .18s var(--ease), transform .18s var(--ease), color .18s, background-color .18s;
+  }
+  .item-row:hover .row-del, .row-del:focus-visible{ opacity:1; transform:none; }
+  .row-del:hover{ color:var(--seal); background:var(--seal-soft); }
+  .row-del:active{ transform:scale(.88); }
+
+  /* 校验失败：抖一下 + 行内提示 */
+  @keyframes shake{ 0%,100%{transform:translateX(0)} 22%{transform:translateX(-4px)} 44%{transform:translateX(3px)} 66%{transform:translateX(-2px)} }
+  .item-row.is-bad{ background:rgba(178,58,46,.035); }
+  .item-row.is-bad .ctl, .item-row.is-bad .amt-box{ border-color:var(--seal); }
+  .item-row.shake{ animation:shake .38s var(--ease); }
+  .row-err{
+    grid-column:3 / 5; font-size:11.5px; color:var(--seal);
+    max-height:0; opacity:0; overflow:hidden; transition:max-height .22s var(--ease), opacity .22s var(--ease);
+  }
+  .item-row.is-bad .row-err{ max-height:24px; opacity:1; padding-top:2px; }
+
+  .items-foot{ display:flex; align-items:center; justify-content:space-between; padding:12px 0 0; }
+  .add-row{
+    display:inline-flex; align-items:center; gap:7px;
+    border:1px dashed var(--rule); background:transparent; border-radius:2px;
+    padding:7px 13px; font-family:inherit; font-size:13px; color:var(--ink-2);
+    cursor:pointer; transition:color .18s, border-color .18s, background-color .18s, transform .12s var(--pop);
+  }
+  .add-row .plus{ font-family:var(--mono); font-size:14px; line-height:1; }
+  .add-row:hover{ color:var(--seal); border-color:var(--seal); background:var(--seal-soft); }
+  .add-row:active{ transform:scale(.96); }
+  .row-count{ font-family:var(--mono); font-size:11px; color:var(--ink-3); letter-spacing:.1em; }
+
+  textarea.ctl{ resize:vertical; min-height:74px; line-height:1.65; }
+
+  /* ===== 6. 右侧汇总栏 ===== */
+  .side{ position:sticky; top:32px; align-self:start; }
+  .side-card{
+    border:1px solid var(--rule); border-radius:3px; background:rgba(255,255,255,.68);
+    box-shadow:0 1px 0 rgba(27,26,23,.03), 0 18px 34px -30px rgba(27,26,23,.4);
+    overflow:hidden;
+  }
+  .side-card + .side-card{ margin-top:16px; }
+  .total{ padding:22px 22px 20px; }
+  .total .cap{
+    font-family:var(--mono); font-size:10px; letter-spacing:.24em;
+    text-transform:uppercase; color:var(--ink-3);
+  }
+  /* 票据总额的经典双线：上细下粗 */
+  .total .sum{
+    margin-top:12px; padding-top:12px; border-top:1px solid var(--ink);
+    display:flex; align-items:baseline; justify-content:flex-end; gap:6px;
+    font-family:var(--mono); letter-spacing:.01em;
+  }
+  .total .sum .cur{ font-size:15px; color:var(--ink-3); }
+  .total .sum .num{ font-size:34px; line-height:1; font-variant-numeric:tabular-nums; }
+  .total .sum .num::after{ content:""; display:block; height:3px; background:var(--ink); margin-top:9px; }
+  .total .cents{ text-align:right; font-family:var(--mono); font-size:11px; color:var(--ink-3); margin-top:8px; letter-spacing:.14em; }
+
+  /* 预算额度条 */
+  .budget{ padding:16px 22px 18px; border-top:1px dashed var(--rule); background:var(--paper-tint); }
+  .budget .line{ display:flex; justify-content:space-between; font-size:11.5px; color:var(--ink-2); letter-spacing:.06em; }
+  .budget .bar{ position:relative; height:3px; margin:11px 0 9px; background:var(--rule); border-radius:2px; overflow:hidden; }
+  .budget .bar i{
+    position:absolute; inset:0 auto 0 0; width:0; background:var(--jade);
+    transition:width .42s var(--ease), background-color .3s;
+  }
+  .budget .hint{ font-family:var(--mono); font-size:10.5px; color:var(--ink-3); letter-spacing:.08em; }
+  .budget.is-over .bar i{ background:var(--seal); }
+  .budget.is-over .hint{ color:var(--seal); }
+
+  /* 审批链 */
+  .chain{ padding:18px 22px 22px; }
+  .chain .cap{
+    font-family:var(--mono); font-size:10px; letter-spacing:.24em;
+    text-transform:uppercase; color:var(--ink-3); margin-bottom:16px;
+  }
+  .chain ol{ margin:0; padding:0; list-style:none; }
+  .chain li{ position:relative; display:flex; gap:12px; padding:0 0 20px 0; }
+  .chain li:last-child{ padding-bottom:0; }
+  .chain li::before{
+    content:""; position:absolute; left:13px; top:30px; bottom:2px; width:1px; background:var(--rule);
+  }
+  .chain li:last-child::before{ display:none; }
+  .av{
+    position:relative; z-index:1; flex:none; width:27px; height:27px; border-radius:50%;
+    display:grid; place-items:center; font-family:var(--serif); font-size:13px;
+    border:1px solid var(--rule); background:var(--paper); color:var(--ink-2);
+  }
+  .chain li[data-on] .av{ border-color:var(--ink); color:var(--ink); background:#fff; }
+  .chain li[data-cur] .av{ border-color:var(--seal); color:var(--seal); background:var(--seal-soft); }
+  .chain .who{ font-size:13.5px; line-height:1.35; }
+  .chain .role{ font-family:var(--mono); font-size:10px; letter-spacing:.14em; color:var(--ink-3); margin-top:3px; }
+
+  /* 提交区 */
+  .actions{ margin-top:18px; }
+  .btn-submit{
+    position:relative; width:100%; border:0; border-radius:3px; cursor:pointer;
+    padding:15px 18px; background:var(--ink); color:var(--paper);
+    font-family:var(--serif); font-size:16px; letter-spacing:.34em; text-indent:.34em;
+    transition:background-color .2s var(--ease), transform .12s var(--pop), box-shadow .2s var(--ease);
+    box-shadow:0 8px 18px -12px rgba(27,26,23,.9);
+  }
+  .btn-submit:hover:not(:disabled){ background:#000; box-shadow:0 12px 22px -12px rgba(27,26,23,.95); }
+  .btn-submit:active:not(:disabled){ transform:scale(.977); box-shadow:0 3px 8px -8px rgba(27,26,23,.9); }
+  .btn-submit:disabled{ cursor:default; background:var(--jade); box-shadow:none; }
+  .btn-submit[data-loading] .label{ opacity:0; }
+  .dots{ position:absolute; inset:0; display:none; align-items:center; justify-content:center; gap:5px; }
+  .btn-submit[data-loading] .dots{ display:flex; }
+  .dots i{ width:5px; height:5px; border-radius:50%; background:currentColor; animation:blip 1s infinite var(--ease); }
+  .dots i:nth-child(2){ animation-delay:.14s; }
+  .dots i:nth-child(3){ animation-delay:.28s; }
+  @keyframes blip{ 0%,100%{opacity:.25; transform:translateY(0)} 40%{opacity:1; transform:translateY(-3px)} }
+  .btn-ghost{
+    display:block; width:100%; margin-top:10px; padding:11px; border:1px solid var(--rule);
+    background:transparent; border-radius:3px; cursor:pointer; font-family:inherit;
+    font-size:13px; letter-spacing:.16em; color:var(--ink-2);
+    transition:border-color .18s, color .18s, background-color .18s, transform .12s var(--pop);
+  }
+  .btn-ghost:hover{ border-color:var(--ink-3); color:var(--ink); background:rgba(255,255,255,.7); }
+  .btn-ghost:active{ transform:scale(.98); }
+  .side-note{
+    margin-top:14px; font-family:var(--mono); font-size:10px; line-height:1.9;
+    letter-spacing:.06em; color:var(--ink-3);
+  }
+  .side-note b{ color:var(--ink-2); font-weight:400; }
+
+  /* ===== 7. 盖章 ===== */
+  .seal-layer{ position:fixed; inset:0; z-index:20; pointer-events:none; display:grid; place-items:center; }
+  /* 外观归属静态样式，动画只由 .on / .fade 控制 */
+  .seal{
+    width:172px; height:172px; border-radius:50%; display:none;
+    place-items:center; text-align:center; color:var(--seal);
+    border:2.5px solid currentColor;
+    box-shadow:inset 0 0 0 1.5px currentColor, inset 0 0 0 4px rgba(178,58,46,.22);
+    background:radial-gradient(circle at 34% 28%, rgba(178,58,46,.03), rgba(178,58,46,.07));
+    font-family:var(--serif); opacity:.85; mix-blend-mode:multiply;
+    transform:rotate(-9deg);
+  }
+  .seal.on{
+    display:grid;
+    animation:stamp .5s cubic-bezier(.2,1.5,.4,1) both;
+  }
+  @keyframes stamp{
+    0%  { opacity:0;   transform:scale(2.15) rotate(-24deg); }
+    62% { opacity:.88; transform:scale(.94)  rotate(-6deg); }
+    100%{ opacity:.85; transform:scale(1)    rotate(-9deg); }
+  }
+  .seal .t{ font-size:29px; letter-spacing:.18em; text-indent:.18em; font-weight:600; }
+  .seal .s{ display:block; margin-top:9px; font-family:var(--mono); font-size:9.5px; letter-spacing:.3em; text-indent:.3em; }
+  .seal .d{ display:block; margin-top:5px; font-family:var(--mono); font-size:9px; letter-spacing:.18em; text-indent:.18em; opacity:.85; }
+  @keyframes thud{ 0%,100%{opacity:.85} 30%{opacity:.68} }
+  .seal.on{ animation:stamp .5s cubic-bezier(.2,1.5,.4,1) both, thud .42s .34s var(--ease); }
+  /* 退场：从落定姿态继续淡出，避免硬切 */
+  .seal.fade{ animation:sealOut .55s var(--ease) forwards; }
+  @keyframes sealOut{
+    from{ opacity:.85; transform:scale(1)    rotate(-9deg); }
+    to  { opacity:0;   transform:scale(1.05) rotate(-9deg); }
+  }
+
+  /* ===== 8. 进场动效 ===== */
+  .rise{ opacity:0; transform:translateY(13px); }
+  .rise.in{ opacity:1; transform:none; transition:opacity .62s var(--ease), transform .62s var(--ease); transition-delay:var(--d,0ms); }
+
+  /* ===== 9. 响应式 ===== */
+  @media (max-width:940px){
+    .wrap{ padding:34px 20px 70px; }
+    .sheet{ grid-template-columns:1fr; gap:34px; }
+    .side{ position:static; }
+    .fields{ grid-template-columns:1fr; gap:22px; }
+    .masthead{ flex-direction:column; align-items:flex-start; gap:14px; }
+    .doc-meta{ text-align:left; }
+  }
+  @media (max-width:640px){
+    .items-head{ display:none; }
+    .item-row{ grid-template-columns:1fr 1fr; gap:6px 14px; padding:13px 0; }
+    .item-row .c-desc{ grid-column:1 / -1; }
+    .row-del{ position:absolute; top:9px; right:0; opacity:1; transform:none; }
+    .item-row .c-amt{ padding-right:34px; }
+    .row-err{ grid-column:1 / -1; }
+  }
+  @media (prefers-reduced-motion:reduce){
+    *,*::before,*::after{ animation-duration:.001ms !important; transition-duration:.001ms !important; }
+    .rise{ opacity:1; transform:none; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ========== 报头 ========== -->
+  <header class="masthead rise">
+    <div class="brand">
+      <h1>费用报销单</h1>
+      <p>Expense Reimbursement&nbsp;&nbsp;·&nbsp;&nbsp;Smart Expense</p>
+    </div>
+    <div class="doc-meta">
+      <div class="doc-no" id="docNo">EXP20261027-0007</div>
+      <div class="doc-date" id="docDate">2026 年 10 月 27 日</div>
+      <span class="status" id="statusChip" data-state="DRAFT"><i></i><span>草稿 DRAFT</span></span>
+    </div>
+  </header>
+
+  <div class="sheet">
+
+    <!-- ========== 左：表单 ========== -->
+    <main>
+      <section class="sec rise" style="--d:60ms">
+        <div class="sec-head"><span class="sec-no">01</span><h2>基本信息</h2></div>
+        <div class="fields">
+          <div class="field">
+            <label for="applicant">申请人</label>
+            <input class="ctl" id="applicant" value="栀麦" />
+          </div>
+          <div class="field">
+            <label for="dept">所属部门</label>
+            <input class="ctl" id="dept" value="研发中心 / 平台组" />
+          </div>
+          <div class="field select">
+            <label for="category">费用类型</label>
+            <select class="ctl" id="category">
+              <option>差旅费</option><option>办公用品</option><option>招待费</option>
+              <option>交通费</option><option>培训费</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="costCenter">成本中心</label>
+            <input class="ctl" id="costCenter" value="CC-1042" />
+          </div>
+        </div>
+      </section>
+
+      <section class="sec rise" style="--d:130ms">
+        <div class="sec-head"><span class="sec-no">02</span><h2>费用明细</h2></div>
+        <div class="items">
+          <div class="items-head">
+            <span>日期</span><span>类别</span><span>事由</span><span class="ta-r">金额</span><span></span>
+          </div>
+          <div id="rows"></div>
+          <div class="items-foot">
+            <button class="add-row" id="addRow" type="button"><span class="plus">+</span>添加一行</button>
+            <span class="row-count" id="rowCount">共 0 条</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="sec rise" style="--d:200ms">
+        <div class="sec-head"><span class="sec-no">03</span><h2>备注说明</h2></div>
+        <div class="field">
+          <label for="remark">补充信息（选填）</label>
+          <textarea class="ctl" id="remark" placeholder="例如：随行 2 人，发票另附纸质原件 3 张"></textarea>
+        </div>
+      </section>
+    </main>
+
+    <!-- ========== 右：汇总 ========== -->
+    <aside class="side">
+      <div class="side-card rise" style="--d:240ms">
+        <div class="total">
+          <div class="cap">Total Amount</div>
+          <div class="sum"><span class="cur">¥</span><span class="num" id="totalNum">0.00</span></div>
+          <div class="cents" id="totalWords">零元整</div>
+        </div>
+        <div class="budget" id="budgetBox">
+          <div class="line"><span>部门可用额度</span><span id="budgetAvail">¥4,800.00</span></div>
+          <div class="bar"><i id="budgetBar"></i></div>
+          <div class="hint" id="budgetHint">已占用 40% · CC-1042</div>
+        </div>
+        <div class="chain">
+          <div class="cap">Approval Flow</div>
+          <ol id="chain">
+            <!-- 草稿态一个都不点亮；服务端返回 currentStep 后再标 data-on / data-cur -->
+            <li><span class="av">陈</span><div><div class="who">陈砚</div><div class="role">直属主管 · STEP 1</div></div></li>
+            <li><span class="av">林</span><div><div class="who">林知夏</div><div class="role">财务复核 · STEP 2</div></div></li>
+            <li><span class="av">周</span><div><div class="who">周叙白</div><div class="role">分管总监 · STEP 3</div></div></li>
+          </ol>
+        </div>
+      </div>
+
+      <div class="actions rise" style="--d:300ms">
+        <button class="btn-submit" id="submit" type="button">
+          <span class="label">提 交 审 批</span>
+          <span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
+        </button>
+        <button class="btn-ghost" id="saveDraft" type="button">存为草稿</button>
+        <p class="side-note">
+          提交将冻结预算 <b id="freezeNum">¥0.00</b><br />
+          会签与驳回状态由服务端状态机判定
+        </p>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<div class="seal-layer"><div class="seal" id="seal">
+  <div><span class="t">已提交</span><span class="s">SUBMITTED</span><span class="d" id="sealDate"></span></div>
+</div></div>
+
+<script>
+(function(){
+  "use strict";
+  const RM = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* ---- 演示数据：接后端时整块换成接口返回值 ---- */
+  const MOCK = {
+    budgetTotal: 8000,      // 部门本期总额
+    budgetUsed: 3200,       // 已扣 + 冻结（演示值）
+    rows: [
+      { date:"2026-10-24", cat:"交通费",  desc:"高铁 杭州东 → 北京南（二等座）", amt:538.50 },
+      { date:"2026-10-24", cat:"差旅费",  desc:"会议住宿 10/24–10/25 两晚",      amt:896.00 },
+      { date:"2026-10-25", cat:"办公用品", desc:"签字笔、便签等耗材",             amt:73.50  }
+    ]
+  };
+
+  const $ = s => document.querySelector(s);
+  const rowsEl = $("#rows");
+
+  /* ---- 数字格式化 ---- */
+  function fmt(n){
+    const s = n.toFixed(2).split(".");
+    return s[0].replace(/\B(?=(\d{3})+(?!\d))/g, ",") + "." + s[1];
+  }
+  const num = v => { const x = parseFloat(String(v).replace(/[^\d.]/g, "")); return isFinite(x) ? x : 0; };
+
+  /* ---- 中文大写金额（票据与凭证上用得到，顺手做对） ---- */
+  function words(n){
+    if (!(n > 0)) return "零元整";
+    const D = "零壹贰叁肆伍陆柒捌玖", U = ["","拾","佰","仟"], G = ["","万","亿","万亿"];
+    const ip = Math.floor(n), fp = Math.round((n - ip) * 100);
+    let s = "";
+    if (ip === 0) s = "零";
+    else {
+      const secs = [];                              // 四位一段，低位在前
+      for (let x = ip; x > 0; x = Math.floor(x / 10000)) secs.push(x % 10000);
+      for (let i = secs.length - 1; i >= 0; i--){
+        const seg = secs[i];
+        if (seg === 0){ continue; }
+        let t = "", zero = false;
+        for (let j = 0, y = seg; y > 0; j++, y = Math.floor(y / 10)){
+          const d = y % 10;
+          if (d === 0) zero = true;
+          else { t = D[d] + U[j] + (zero && t ? "零" : "") + t; zero = false; }
+        }
+        s += (s && seg < 1000 ? "零" : "") + t + G[i];   // 跨段补零：壹拾万「零」伍
+      }
+    }
+    s += "元";
+    if (fp === 0) return s + "整";
+    const jiao = Math.floor(fp / 10), fen = fp % 10;
+    if (jiao && fen) return s + D[jiao] + "角" + D[fen] + "分";
+    if (jiao) return s + D[jiao] + "角";
+    return s + "零" + D[fen] + "分";
+  }
+
+  /* ---- 数字滚动：从当前显示值缓动到目标值 ---- */
+  const shown = { v: 0 };
+  let raf = null;
+  function tweenTo(to){
+    const from = shown.v;
+    if (from === to) return;
+    cancelAnimationFrame(raf);
+    if (RM){ shown.v = to; $("#totalNum").textContent = fmt(to); return; }
+    const t0 = performance.now(), dur = Math.min(620, 220 + Math.abs(to - from) * 1.2);
+    const el = $("#totalNum");
+    (function step(t){
+      const p = Math.min(1, (t - t0) / dur);
+      const e = 1 - Math.pow(1 - p, 4);              // easeOutQuart
+      shown.v = from + (to - from) * e;
+      el.textContent = fmt(shown.v);
+      if (p < 1) raf = requestAnimationFrame(step);
+      else { shown.v = to; el.textContent = fmt(to); }
+    })(t0);
+  }
+
+  /* ---- 建一行明细 ---- */
+  const CATS = ["交通费","差旅费","办公用品","招待费","培训费"];
+  function makeRow(data){
+    const r = document.createElement("div");
+    r.className = "item-row";
+    r.innerHTML =
+      '<div class="c c-date"><input class="ctl js-date" type="date"></div>' +
+      '<div class="c c-cat"><select class="ctl js-cat">' +
+        CATS.map(c => '<option>' + c + '</option>').join("") +
+      '</select></div>' +
+      '<div class="c c-desc"><input class="ctl js-desc" type="text" placeholder="事由，越具体越省沟通成本"></div>' +
+      '<div class="c c-amt"><div class="amt-box"><span class="cur">¥</span>' +
+        '<input class="ctl js-amt" type="text" inputmode="decimal" placeholder="0.00" autocomplete="off"></div></div>' +
+      '<div class="c c-del"><button class="row-del" type="button" title="删除此行" aria-label="删除此行">×</button></div>' +
+      '<div class="row-err" role="alert"></div>';
+
+    r.querySelector(".js-date").value = data.date || "";
+    r.querySelector(".js-cat").value  = data.cat  || CATS[0];
+    r.querySelector(".js-desc").value = data.desc || "";
+    r.querySelector(".js-amt").value  = data.amt != null ? fmt(data.amt) : "";
+
+    /* 金额：只吃数字，失焦补两位小数 */
+    const amt = r.querySelector(".js-amt");
+    amt.addEventListener("input", () => {
+      const clean = amt.value.replace(/[^\d.]/g, "").replace(/(\..*)\./g, "$1");
+      if (clean !== amt.value){ const p = amt.selectionStart; amt.value = clean; amt.setSelectionRange(p - 1, p - 1); }
+      refresh();
+    });
+    amt.addEventListener("blur", () => { if (amt.value) amt.value = fmt(num(amt.value)); refresh(); });
+    /* 金额行按 Enter → 直接开一行新的，这是录入人的真实动线 */
+    amt.addEventListener("keydown", e => { if (e.key === "Enter"){ e.preventDefault(); addRow(); } });
+
+    r.querySelector(".row-del").addEventListener("click", () => removeRow(r));
+    return r;
+  }
+
+  /* ---- 行进出场 ---- */
+  function enterAnim(r){
+    if (RM) return;
+    const h = r.offsetHeight;
+    r.style.overflow = "hidden";
+    r.animate(
+      [{ height:"0px", opacity:0, transform:"translateY(-5px)" },
+       { height:h + "px", opacity:1, transform:"none" }],
+      { duration:280, easing:"cubic-bezier(.22,.68,.24,1)" }
+    ).onfinish = () => { r.style.overflow = ""; };
+  }
+  function addRow(data){
+    const r = makeRow(data || {});
+    rowsEl.appendChild(r);
+    enterAnim(r);
+    refresh();
+    if (!data) r.querySelector(".js-desc").focus();   // 手点"添加一行"才抢焦点，批量初始化不抢
+    return r;
+  }
+  function removeRow(r){
+    if (rowsEl.children.length <= 1){ flag(r, "至少保留一条明细"); return; }
+    if (RM){ r.remove(); refresh(); return; }
+    const a = r.animate([{ height:r.offsetHeight + "px", opacity:1 },
+                         { height:"0px", opacity:0 }],
+                        { duration:200, easing:"cubic-bezier(.4,0,.6,1)" });
+    a.onfinish = () => { r.remove(); refresh(); };
+    r.style.overflow = "hidden";
+  }
+  function flag(r, msg){
+    r.querySelector(".row-err").textContent = msg;
+    r.classList.add("is-bad","shake");
+    setTimeout(() => r.classList.remove("shake"), 420);
+  }
+  function clearFlag(r){ r.classList.remove("is-bad"); r.querySelector(".row-err").textContent = ""; }
+
+  /* ---- 重算：合计 / 预算 / 计数 ---- */
+  function refresh(){
+    const rows = [...rowsEl.children];
+    let sum = 0;
+    rows.forEach(r => {
+      const v = num(r.querySelector(".js-amt").value);
+      sum += v;
+    });
+    tweenTo(sum);
+    $("#totalWords").textContent = words(sum);
+    $("#rowCount").textContent = "共 " + rows.length + " 条";
+    $("#freezeNum").textContent = "¥" + fmt(sum);
+
+    const avail = MOCK.budgetTotal - MOCK.budgetUsed;      // 可用额度
+    const used  = MOCK.budgetUsed + sum;
+    const pct   = Math.min(100, used / MOCK.budgetTotal * 100);
+    $("#budgetBar").style.width = pct + "%";
+    const over = sum > avail;
+    $("#budgetBox").classList.toggle("is-over", over);
+    $("#budgetAvail").textContent = "¥" + fmt(avail);
+    $("#budgetHint").textContent = over
+      ? "超出可用额度 ¥" + fmt(sum - avail)
+      : "提交后占用 " + Math.round(used / MOCK.budgetTotal * 100) + "% · CC-1042";
+  }
+
+  /* ---- 校验 + 提交 ---- */
+  function validate(){
+    let bad = null;
+    [...rowsEl.children].forEach(r => {
+      clearFlag(r);
+      const d = r.querySelector(".js-date").value;
+      const s = r.querySelector(".js-desc").value.trim();
+      const a = num(r.querySelector(".js-amt").value);
+      let msg = "";
+      if (!d) msg = "请选择发生日期";
+      else if (!s) msg = "请填写事由";
+      else if (a <= 0) msg = "金额需大于 0";
+      if (msg){ flag(r, msg); bad = bad || r; }
+    });
+    if (!bad){
+      const sum = [...rowsEl.children].reduce((t,r) => t + num(r.querySelector(".js-amt").value), 0);
+      const avail = MOCK.budgetTotal - MOCK.budgetUsed;
+      if (sum > avail){
+        flag(rowsEl.lastElementChild, "合计超出部门可用额度 ¥" + fmt(avail));
+        bad = rowsEl.lastElementChild;
+      }
+    }
+    if (bad) bad.scrollIntoView({ behavior: RM ? "auto" : "smooth", block:"center" });
+    return !bad;
+  }
+
+  const btn = $("#submit");
+  btn.addEventListener("click", () => {
+    if (btn.disabled || btn.hasAttribute("data-loading")) return;
+    if (!validate()) return;
+
+    btn.setAttribute("data-loading", "");
+    /* 真实实现：POST /api/v1/reports/{id}/submit，带 Idempotency-Key: crypto.randomUUID() */
+    setTimeout(() => {
+      btn.removeAttribute("data-loading");
+      btn.disabled = true;
+      const label = btn.querySelector(".label");
+      label.textContent = "已提交";
+      label.style.opacity = "1";
+      $("#statusChip").dataset.state = "PENDING";
+      $("#statusChip").querySelector("span").textContent = "待审批 PENDING";
+      [...$("#chain").children].forEach((li, i) => { li.toggleAttribute("data-on", i <= 1); li.toggleAttribute("data-cur", i === 1); });
+
+      const seal = $("#seal");
+      $("#sealDate").textContent = new Date().toLocaleDateString("zh-CN");
+      seal.classList.add("on");
+      setTimeout(() => seal.classList.add("fade"), 2800);
+      setTimeout(() => seal.classList.remove("on", "fade"), 3400);
+    }, 1150);
+  });
+
+  $("#saveDraft").addEventListener("click", () => {
+    $("#statusChip").dataset.state = "DRAFT";
+    $("#statusChip").querySelector("span").textContent = "草稿已存 · DRAFT";
+    /* 真实实现：POST /api/v1/reports（草稿），PUT /reports/{id}（更新） */
+  });
+
+  $("#addRow").addEventListener("click", () => addRow());
+
+  /* ---- 初始化 ---- */
+  MOCK.rows.forEach(d => rowsEl.appendChild(makeRow(d)));
+  shown.v = [...rowsEl.children].reduce((t, r) => t + num(r.querySelector(".js-amt").value), 0);
+  $("#totalNum").textContent = fmt(shown.v);   // 首屏直接落值，不播滚动动画
+  refresh();
+
+  /* 进场：错开淡入 */
+  requestAnimationFrame(() => {
+    document.querySelectorAll(".rise").forEach(el => el.classList.add("in"));
+  });
+})();
+</script>
+</body>
+</html>

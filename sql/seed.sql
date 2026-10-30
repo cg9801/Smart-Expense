@@ -22,12 +22,12 @@ INSERT INTO sys_role (id, code, name) VALUES
 
 -- 林一(1) 是演示主账号；张三(2) 是其直属主管；王五(4) 分管技术部
 INSERT INTO sys_user (id, employee_no, username, real_name, password_hash, email, dept_id, manager_user_id) VALUES
-  (1, 'E1001', 'linyi',    '林一',   'PLACEHOLDER_BCRYPT', 'linyi@example.com',    2, 2),
-  (2, 'E1002', 'zhangsan', '张三',     'PLACEHOLDER_BCRYPT', 'zhangsan@example.com', 2, 4),
-  (3, 'E2001', 'lisi',     '李四',     'PLACEHOLDER_BCRYPT', 'lisi@example.com',     3, 5),
-  (4, 'E3001', 'wangwu',   '王五',     'PLACEHOLDER_BCRYPT', 'wangwu@example.com',   1, NULL),
-  (5, 'E3002', 'zhaoliu',  '赵六',     'PLACEHOLDER_BCRYPT', 'zhaoliu@example.com',  1, NULL),
-  (6, 'E9001', 'admin',    '系统管理员', 'PLACEHOLDER_BCRYPT', 'admin@example.com',      1, NULL);
+  (1, 'E1001', 'linyi',    '林一',   '$2a$10$9U5OR/q7WiAYQsQN0OzbwuoyeBAT3o5aNucNUEe6BZn8FsMqvzGpS', 'linyi@example.com',    2, 2),
+  (2, 'E1002', 'zhangsan', '张三',     '$2a$10$9U5OR/q7WiAYQsQN0OzbwuoyeBAT3o5aNucNUEe6BZn8FsMqvzGpS', 'zhangsan@example.com', 2, 4),
+  (3, 'E2001', 'lisi',     '李四',     '$2a$10$9U5OR/q7WiAYQsQN0OzbwuoyeBAT3o5aNucNUEe6BZn8FsMqvzGpS', 'lisi@example.com',     3, 5),
+  (4, 'E3001', 'wangwu',   '王五',     '$2a$10$9U5OR/q7WiAYQsQN0OzbwuoyeBAT3o5aNucNUEe6BZn8FsMqvzGpS', 'wangwu@example.com',   1, NULL),
+  (5, 'E3002', 'zhaoliu',  '赵六',     '$2a$10$9U5OR/q7WiAYQsQN0OzbwuoyeBAT3o5aNucNUEe6BZn8FsMqvzGpS', 'zhaoliu@example.com',  1, NULL),
+  (6, 'E9001', 'admin',    '系统管理员', '$2a$10$9U5OR/q7WiAYQsQN0OzbwuoyeBAT3o5aNucNUEe6BZn8FsMqvzGpS', 'admin@example.com',      1, NULL);
 
 INSERT INTO sys_user_role (user_id, role_id) VALUES
   (1, 1),           -- 林一：员工

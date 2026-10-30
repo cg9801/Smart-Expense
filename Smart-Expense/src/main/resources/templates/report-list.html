@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<!--
+  我的报销单 · 用户页（前端原型）
+  ---------------------------------------------------------------
+  纯静态原型：浏览器直接打开即可预览，数据来自脚本顶部 MOCK。
+  对应接口（docs/03-接口清单.md §2.2）：
+    GET  /api/v1/reports?scope=mine&status=&page=&size=   → 列表（契约已有，后端待实现）
+    POST /api/v1/reports/{id}/withdraw                    → 撤回（已实现，仅 PENDING 无人审批时）
+  接后端时把 USE_MOCK 改为 false，行字段与 ReportVO 一一对齐。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>我的报销单 · Smart Expense</title>
+<link rel="stylesheet" href="/css/common.css" />
+<style>
+  /* 本页专属：顶部统计条 + 撤回中行态 */
+  .stats{ display:flex; gap:34px; padding:14px 0 0; font-size:12.5px; color:var(--ink-2); }
+  .stats b{ font-family:var(--mono); font-size:17px; color:var(--ink); font-weight:400; margin-left:7px; font-variant-numeric:tabular-nums; }
+  tr.is-busy{ opacity:.55; pointer-events:none; }
+  .link{ color:var(--ink-2); text-decoration:none; border-bottom:1px dotted var(--rule); }
+  .link:hover{ color:var(--seal); border-color:var(--seal); }
+</style>
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="topnav-in">
+    <a class="brandmark" href="/report-list.html"><span class="sq">支</span><b>Smart Expense</b></a>
+    <div class="tabs">
+      <a href="/report-list.html" aria-current="page">我的报销单</a>
+      <a href="/report-submit.html">新建报销单</a>
+      <a href="/approval-todo.html">审批待办</a>
+      <a href="/admin-console.html">运营管理台</a>
+    </div>
+    <div class="whoami">
+      <span class="lb">当前身份</span>
+      <select id="whoami" title="JWT 接入前的临时身份，请求以 X-User-Id 头携带"></select>
+    </div>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <header class="masthead rise">
+    <div>
+      <h1>我的报销单</h1>
+      <p class="sub">My Reports&nbsp;&nbsp;·&nbsp;&nbsp;Scope: mine</p>
+    </div>
+    <div class="meta" id="today">—</div>
+  </header>
+
+  <div class="stats rise" style="--d:80ms">
+    <span>在途<b id="statOngoing">0</b></span>
+    <span>本月提交<b id="statMonth">0</b></span>
+    <span>本月金额<b id="statAmount">¥0.00</b></span>
+  </div>
+
+  <section class="sec rise" style="--d:140ms">
+    <div class="sec-head">
+      <span class="sec-no">01</span><h2>报销单列表</h2>
+      <span class="aside" style="margin-left:auto" id="countInfo"></span>
+    </div>
+    <div class="filter-tabs" id="filters" style="margin-bottom:18px">
+      <button data-st="" aria-pressed="true">全部</button>
+      <button data-st="DRAFT" aria-pressed="false">草稿</button>
+      <button data-st="PENDING,APPROVING" aria-pressed="false">审批中</button>
+      <button data-st="APPROVED,PAID" aria-pressed="false">已通过</button>
+      <button data-st="REJECTED" aria-pressed="false">已驳回</button>
+    </div>
+    <table class="ledger">
+      <thead>
+        <tr>
+          <th>单号</th><th>标题</th><th>类型</th>
+          <th class="ta-r">金额</th><th>状态</th><th>创建时间</th><th class="ta-r">操作</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div id="empty" class="empty" hidden>该状态下暂无报销单</div>
+  </section>
+</div>
+
+<!-- 撤回确认 -->
+<div class="overlay" id="dlg">
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dlgTitle">
+    <h3 id="dlgTitle">撤回报销单</h3>
+    <p id="dlgText">仅「待审批且尚无人处理」时可撤回，撤回后单据回到草稿态。确定撤回吗？</p>
+    <div class="ops">
+      <button class="btn-ghost" id="dlgCancel">取消</button>
+      <button class="btn" id="dlgOk">确认撤回</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(function(){
+  "use strict";
+
+  /* ---- 身份：JWT 接入前用 X-User-Id 临时标识，与种子数据 sys_user 对齐 ---- */
+  const USERS = [
+    { id: 1001, name: "栀麦（员工）" },
+    { id: 1002, name: "陈砚（主管）" },
+    { id: 1003, name: "林知夏（财务）" },
+    { id: 1004, name: "周叙白（总监）" },
+    { id: 1005, name: "admin（管理员）" }
+  ];
+  const whoSel = document.getElementById("whoami");
+  USERS.forEach(u => {
+    const o = document.createElement("option");
+    o.value = u.id; o.textContent = u.name;
+    whoSel.appendChild(o);
+  });
+  whoSel.value = localStorage.getItem("se.uid") || USERS[0].id;
+  whoSel.addEventListener("change", () => {
+    localStorage.setItem("se.uid", whoSel.value);
+    toast("身份已切换为 " + whoSel.selectedOptions[0].textContent);
+  });
+  const uid = () => localStorage.getItem("se.uid") || USERS[0].id;
+
+  /* ---- 演示数据：字段名与 ReportVO 一致，切接口时无需改渲染层 ---- */
+  const MOCK = {
+    total: 6,
+    records: [
+      { id:1007, reportNo:"EXP20261027-0007", title:"杭州客户拜访差旅",      expenseType:"差旅费",  amountTotal:1508.00, status:"APPROVING", createdAt:"2026-10-27 09:12" },
+      { id:1006, reportNo:"EXP20261026-0006", title:"十月办公用品采购",      expenseType:"办公用品", amountTotal:73.50,   status:"PENDING",   createdAt:"2026-10-26 16:40" },
+      { id:1005, reportNo:"EXP20261024-0005", title:"团队季度团建餐费",      expenseType:"招待费",  amountTotal:1260.00, status:"APPROVED",  createdAt:"2026-10-24 11:05" },
+      { id:1004, reportNo:"EXP20261022-0004", title:"云服务年度续费分摊",    expenseType:"培训费",  amountTotal:4800.00, status:"PAID",      createdAt:"2026-10-22 14:30" },
+      { id:1003, reportNo:"EXP20261020-0003", title:"外地会议住宿（超标）",  expenseType:"差旅费",  amountTotal:896.00,  status:"REJECTED",  createdAt:"2026-10-20 10:18" },
+      { id:1002, reportNo:"EXP20261018-0002", title:"打印机耗材",            expenseType:"办公用品", amountTotal:230.00,  status:"DRAFT",     createdAt:"2026-10-18 15:02" }
+    ]
+  };
+
+  /* ---- API 层：USE_MOCK=false 即走真实接口（见 docs/03 §2.2） ---- */
+  const USE_MOCK = true;
+  async function listMine(status, page, size){
+    if (USE_MOCK) return MOCK;
+    const qs = new URLSearchParams({ scope:"mine", page, size });
+    if (status) qs.set("status", status);
+    const res = await fetch("/api/v1/reports?" + qs, { headers:{ "X-User-Id": uid() } });
+    return (await res.json()).data;
+  }
+  async function withdraw(id){
+    if (USE_MOCK) return;
+    const res = await fetch("/api/v1/reports/" + id + "/withdraw", {
+      method: "POST",
+      headers: { "X-User-Id": uid(), "X-Trace-Id": crypto.randomUUID().slice(0, 6) }
+    });
+    const body = await res.json();
+    if (body.code !== 0) throw new Error(body.message);
+  }
+
+  /* ---- 渲染 ---- */
+  const fmt = n => Number(n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  let curStatus = "";
+  const rowsEl = document.getElementById("rows");
+
+  function render(list){
+    rowsEl.innerHTML = "";
+    document.getElementById("empty").hidden = list.records.length > 0;
+    document.getElementById("countInfo").textContent = "共 " + list.records.length + " 条";
+    list.records.forEach(r => {
+      const tr = document.createElement("tr");
+      const canWithdraw = r.status === "PENDING";
+      tr.innerHTML =
+        '<td class="mono">' + r.reportNo + '</td>' +
+        '<td>' + r.title + '</td>' +
+        '<td class="mut">' + r.expenseType + '</td>' +
+        '<td class="num">¥' + fmt(r.amountTotal) + '</td>' +
+        '<td><span class="chip" data-state="' + r.status + '"><i></i></span></td>' +
+        '<td class="mut">' + r.createdAt + '</td>' +
+        '<td><div class="row-actions">' +
+          '<a class="link" href="/report-submit.html">查看</a>' +
+          (canWithdraw ? '<button class="btn-seal btn-sm" data-act="withdraw" data-id="' + r.id + '">撤回</button>' : '') +
+        '</div></td>';
+      rowsEl.appendChild(tr);
+    });
+    stats(list.records);
+  }
+
+  function stats(records){
+    const ongoing = records.filter(r => ["PENDING","APPROVING"].includes(r.status)).length;
+    const month = records.filter(r => r.createdAt.startsWith("2026-10"));
+    document.getElementById("statOngoing").textContent = ongoing;
+    document.getElementById("statMonth").textContent = month.length;
+    document.getElementById("statAmount").textContent =
+      "¥" + fmt(month.reduce((t, r) => t + r.amountTotal, 0));
+  }
+
+  /* ---- 状态筛选：后端支持逗号分隔多值（status=PENDING,APPROVING） ---- */
+  document.getElementById("filters").addEventListener("click", e => {
+    const btn = e.target.closest("button");
+    if (!btn) return;
+    document.querySelectorAll("#filters button").forEach(b => b.setAttribute("aria-pressed", "false"));
+    btn.setAttribute("aria-pressed", "true");
+    curStatus = btn.dataset.st;
+    load();
+  });
+
+  async function load(){
+    render(await listMine(curStatus, 1, 10));
+  }
+
+  /* ---- 撤回：状态机入口 T2，服务端会校验 PENDING 且无人审批 ---- */
+  let pendingId = null;
+  rowsEl.addEventListener("click", e => {
+    const btn = e.target.closest('[data-act="withdraw"]');
+    if (!btn) return;
+    pendingId = btn.dataset.id;
+    document.getElementById("dlg").classList.add("on");
+  });
+  document.getElementById("dlgCancel").addEventListener("click", () =>
+    document.getElementById("dlg").classList.remove("on"));
+  document.getElementById("dlgOk").addEventListener("click", async () => {
+    document.getElementById("dlg").classList.remove("on");
+    try {
+      await withdraw(pendingId);
+      toast("已撤回，单据回到草稿态");
+      load();
+    } catch (err) { toast("撤回失败：" + err.message); }
+  });
+
+  /* ---- 杂项 ---- */
+  let toastTimer;
+  function toast(msg){
+    const t = document.getElementById("toast");
+    t.textContent = msg;
+    t.classList.add("on");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => t.classList.remove("on"), 2400);
+  }
+  document.getElementById("today").textContent =
+    new Date().toLocaleDateString("zh-CN", { year:"numeric", month:"long", day:"numeric", weekday:"long" });
+
+  requestAnimationFrame(() =>
+    document.querySelectorAll(".rise").forEach(el => el.classList.add("in")));
+  load();
+})();
+</script>
+</body>
+</html>
