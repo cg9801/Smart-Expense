@@ -1,12 +1,20 @@
 package com.occ.smartexpense.service.impl;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.occ.smartexpense.ai.AgentLoop;
 import com.occ.smartexpense.ai.AiAdviceValidator;
 import com.occ.smartexpense.entity.AiReview;
+import com.occ.smartexpense.entity.DeptBudget;
+import com.occ.smartexpense.entity.ExpenseItem;
 import com.occ.smartexpense.entity.ExpenseReport;
 import com.occ.smartexpense.mapper.AiReviewMapper;
+import com.occ.smartexpense.mapper.DeptBudgetMapper;
+import com.occ.smartexpense.mapper.ExpenseItemMapper;
 import com.occ.smartexpense.mapper.ExpenseReportMapper;
 import com.occ.smartexpense.mapper.MqConsumeLogMapper;
+import com.occ.smartexpense.rule.HardFinding;
+import com.occ.smartexpense.rule.HardRuleEngine;
+import com.occ.smartexpense.rule.RiskMerger;
 import com.occ.smartexpense.service.AiReviewService;
 import com.occ.smartexpense.vo.AiAdviceVO;
 import lombok.RequiredArgsConstructor;
@@ -40,8 +48,12 @@ public class AiReviewServiceImpl implements AiReviewService {
     /** 低于该置信度的建议不展示：宁可不给建议，也不误导审批人（docs/11 §5.4） */
     private static final BigDecimal MIN_DISPLAY_CONFIDENCE = new BigDecimal("0.60");
     private final AiAdviceValidator adviceValidator;
+    private final HardRuleEngine hardRuleEngine;
+    private final RiskMerger riskMerger;
     private final AiReviewMapper aiReviewMapper;
     private final ExpenseReportMapper reportMapper;
+    private final ExpenseItemMapper itemMapper;
+    private final DeptBudgetMapper deptBudgetMapper;
     private final MqConsumeLogMapper consumeLogMapper;
     private final AgentLoop agentLoop;
     private final ObjectMapper objectMapper;
@@ -112,12 +124,20 @@ public class AiReviewServiceImpl implements AiReviewService {
             return;
         }
 
+        // 硬规则先算：它不依赖模型，模型挂了 findings 依然有效（docs/11 §2.1）
+        List<ExpenseItem> items = itemMapper.selectList(new LambdaQueryWrapper<ExpenseItem>()
+                .eq(ExpenseItem::getReportId, reportId)
+                .orderByAsc(ExpenseItem::getSortNo));
+        DeptBudget budget = report.getBudgetId() == null
+                ? null : deptBudgetMapper.selectById(report.getBudgetId());
+        List<HardFinding> findings = hardRuleEngine.evaluate(report, items, budget);
+
         AgentLoop.AgentResult result;
         try {
-            result = agentLoop.run(buildContext(report));
+            result = agentLoop.run(buildContext(report, findings));
         } catch (Exception e) {
             log.warn("Agent 执行异常 reportId={}", reportId, e);
-            result = new AgentLoop.AgentResult(null, 0, 0, 0, "AGENT_ERROR",0, Set.of());
+            result = new AgentLoop.AgentResult(null, 0, 0, 0, "AGENT_ERROR", 0, Set.of());
         }
 
         AiReview review = new AiReview();
@@ -128,7 +148,9 @@ public class AiReviewServiceImpl implements AiReviewService {
         review.setToolCalls(result.toolCalls());
         review.setToolErrors(result.toolErrors());
         review.setLatencyMs(Math.toIntExact(result.latencyMs()));
-        applyResult(review, result);
+        // 硬规则结果独立于 AI 成败，始终落库（docs/11 §2.1）
+        review.setHardFindings(writeFindings(findings));
+        applyResult(review, result, findings);
 
         try {
             aiReviewMapper.insert(review);
@@ -138,7 +160,7 @@ public class AiReviewServiceImpl implements AiReviewService {
     }
 
     /** 把 Agent 结果写到实体上：成功解析 final JSON，失败记 error */
-    private void applyResult(AiReview review, AgentLoop.AgentResult result) {
+    private void applyResult(AiReview review, AgentLoop.AgentResult result, List<HardFinding> findings) {
         if (!result.success()) {
             fail(review, result.error());
             return;
@@ -150,7 +172,8 @@ public class AiReviewServiceImpl implements AiReviewService {
                 fail(review, verdict.errorCode());
                 return;
             }
-            review.setRiskLevel(verdict.riskLevel());
+            // 风险只能升不能降：最终 = max(硬规则, AI)，见 docs/11 §5.5
+            review.setRiskLevel(riskMerger.merge(findings, verdict.riskLevel()));
             review.setConfidence(verdict.confidence());
             review.setAiReasons(verdict.reasonsJson());
             review.setStatus("SUCCESS");
@@ -161,7 +184,7 @@ public class AiReviewServiceImpl implements AiReviewService {
     }
 
     /** 初始上下文：只给最小字段，其余由 Agent 调工具获取（docs/11 §5.3） */
-    private String buildContext(ExpenseReport report) {
+    private String buildContext(ExpenseReport report, List<HardFinding> findings) {
         Map<String, Object> context = new LinkedHashMap<>();
         context.put("reportId", report.getId());
         context.put("amountTotal", report.getAmountTotal() == null
@@ -169,8 +192,18 @@ public class AiReviewServiceImpl implements AiReviewService {
         context.put("expenseType", report.getExpenseType());
         context.put("deptId", report.getApplicantDeptId());
         context.put("period", periodOf(report));
-        context.put("hardFindings", List.of());
+        context.put("hardFindings", findings);
         return objectMapper.writeValueAsString(context);
+    }
+
+    /** 硬规则结果统一序列化口径：进上下文与落库用同一份 JSON */
+    private String writeFindings(List<HardFinding> findings) {
+        try {
+            return objectMapper.writeValueAsString(findings);
+        } catch (Exception e) {
+            log.warn("硬规则序列化失败，按空数组落库", e);
+            return "[]";
+        }
     }
 
     private String periodOf(ExpenseReport report) {
