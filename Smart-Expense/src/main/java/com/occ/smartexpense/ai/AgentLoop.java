@@ -53,7 +53,7 @@ public class AgentLoop {
 
     /** Agent 运行结果，供 AiReviewService 落库 */
     public record AgentResult(String finalJson, int steps, int toolCalls, int toolErrors, String error, long latencyMs,
-                              Set<String> usedTools) {
+                              Map<String, String> toolResults) {
 
         public boolean success() {
             return error == null && finalJson != null;
@@ -70,7 +70,9 @@ public class AgentLoop {
         long startNanos = System.nanoTime();
         Map<String, AiTool> toolMap = toolMap();
         Map<String, String> cache = new HashMap<>();
-        Set<String> usedTools = new LinkedHashSet<>();
+        // 工具名 -> 最后一次返回的 JSON：供校验层核对 evidence 路径是否真实存在
+        // 同一工具多次调用时只保留最后一次（模型下结论通常依据最近一次查询）
+        Map<String, String> toolResults = new LinkedHashMap<>();
         List<Map<String, String>> messages = new ArrayList<>();
         messages.add(message("system", SYSTEM_PROMPT));
         messages.add(message("user", initialContext));
@@ -82,7 +84,7 @@ public class AgentLoop {
 
         while (steps < maxSteps) {
             if (System.currentTimeMillis() > deadline) {
-                return new AgentResult(null, steps, toolCalls, toolErrors, "TIMEOUT",elapsedMs(startNanos),Set.copyOf(usedTools));
+                return new AgentResult(null, steps, toolCalls, toolErrors, "TIMEOUT",elapsedMs(startNanos),Map.copyOf(toolResults));
             }
 
             String reply;
@@ -90,7 +92,7 @@ public class AgentLoop {
                 reply = aiChatClient.chat(messages);
             } catch (Exception e) {
                 log.warn("模型调用失败", e);
-                return new AgentResult(null, steps, toolCalls, toolErrors, "MODEL_ERROR",elapsedMs(startNanos),Set.copyOf(usedTools));
+                return new AgentResult(null, steps, toolCalls, toolErrors, "MODEL_ERROR",elapsedMs(startNanos),Map.copyOf(toolResults));
             }
             steps++;
 
@@ -103,11 +105,11 @@ public class AgentLoop {
                     messages.add(message("user", "输出不是合法 JSON，请只输出一个 JSON 对象。"));
                     continue;
                 }
-                return new AgentResult(null, steps, toolCalls, toolErrors, "BAD_JSON",elapsedMs(startNanos),Set.copyOf(usedTools));
+                return new AgentResult(null, steps, toolCalls, toolErrors, "BAD_JSON",elapsedMs(startNanos),Map.copyOf(toolResults));
             }
 
             if (node.has("final")) {
-                return new AgentResult(node.get("final").toString(), steps, toolCalls, toolErrors, null,elapsedMs(startNanos),Set.copyOf(usedTools));
+                return new AgentResult(node.get("final").toString(), steps, toolCalls, toolErrors, null,elapsedMs(startNanos),Map.copyOf(toolResults));
             }
 
             String toolName = node.path("tool").asText("");
@@ -139,12 +141,13 @@ public class AgentLoop {
 
             messages.add(message("assistant", reply));
             messages.add(message("user", "TOOL_RESULT " + result));
+            // 缓存命中也算"见过"：模型拿到的确实是真实结果
+            toolResults.put(toolName, result);
             if (hit) {
                 log.debug("工具结果命中缓存 tool={}", toolName);
-                usedTools.add(toolName);
             }
         }
-        return new AgentResult(null, steps, toolCalls, toolErrors, "STEP_LIMIT",elapsedMs(startNanos),Set.copyOf(usedTools));
+        return new AgentResult(null, steps, toolCalls, toolErrors, "STEP_LIMIT",elapsedMs(startNanos),Map.copyOf(toolResults));
     }
 
     private Map<String, String> message(String role, String content) {

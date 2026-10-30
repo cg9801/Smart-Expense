@@ -144,7 +144,7 @@ public class AiReviewServiceImpl implements AiReviewService {
             result = agentLoop.run(buildContext(report, findings));
         } catch (Exception e) {
             log.warn("Agent 执行异常 reportId={}", reportId, e);
-            result = new AgentLoop.AgentResult(null, 0, 0, 0, "AGENT_ERROR", 0, Set.of());
+            result = new AgentLoop.AgentResult(null, 0, 0, 0, "AGENT_ERROR", 0, Map.of());
         }
 
         AiReview review = new AiReview();
@@ -173,7 +173,11 @@ public class AiReviewServiceImpl implements AiReviewService {
             return;
         }
         try {
-            AiAdviceValidator.Verdict verdict = adviceValidator.validate(result.finalJson(), result.usedTools());
+            // 证据源 = 硬规则上下文 + 本轮工具返回；validator 只认"名字 → JSON"，不认识业务对象
+            Map<String, String> sources = new LinkedHashMap<>();
+            sources.put("hardFindings", writeFindings(findings));
+            sources.putAll(result.toolResults());
+            AiAdviceValidator.Verdict verdict = adviceValidator.validate(result.finalJson(), sources);
             if (!verdict.valid()) {
                 log.info("AI 建议未通过校验 reportId={}, code={}", review.getReportId(), verdict.errorCode());
                 fail(review, verdict.errorCode());

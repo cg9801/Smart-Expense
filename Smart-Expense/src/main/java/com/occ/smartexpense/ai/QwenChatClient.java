@@ -3,15 +3,21 @@ package com.occ.smartexpense.ai;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.http.MediaType;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.RestClient;
+import tools.jackson.databind.JsonNode;
 
+import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
  * 阿里云百炼（DashScope）OpenAI 兼容客户端，见 docs/11 §5.9。
  *
- * <p>配置项（application.yaml）：
+ * <p>配置项（application.yaml / 环境变量）：
  * <pre>
  * ai.provider=qwen
  * ai.base-url=https://dashscope.aliyuncs.com/compatible-mode/v1
@@ -25,22 +31,51 @@ import java.util.Map;
 @ConditionalOnProperty(name = "ai.provider", havingValue = "qwen")
 public class QwenChatClient implements AiChatClient {
 
-    @Value("${ai.base-url:https://dashscope.aliyuncs.com/compatible-mode/v1}")
-    private String baseUrl;
+    private final RestClient restClient;
+    private final String apiKey;
+    private final String textModel;
 
-    @Value("${ai.api-key:}")
-    private String apiKey;
-
-    @Value("${ai.text-model:qwen-plus}")
-    private String textModel;
+    public QwenChatClient(RestClient.Builder builder,
+                          @Value("${ai.base-url:https://dashscope.aliyuncs.com/compatible-mode/v1}") String baseUrl,
+                          @Value("${ai.api-key:}") String apiKey,
+                          @Value("${ai.text-model:qwen-plus}") String textModel,
+                          @Value("${ai.agent.step-timeout-ms:3000}") long stepTimeoutMs) {
+        this.apiKey = apiKey;
+        this.textModel = textModel;
+        // 单步超时由客户端负责，AgentLoop 只管总预算
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(Duration.ofMillis(stepTimeoutMs));
+        factory.setReadTimeout(Duration.ofMillis(stepTimeoutMs));
+        this.restClient = builder.baseUrl(baseUrl).requestFactory(factory).build();
+    }
 
     @Override
     public String chat(List<Map<String, String>> messages) {
-        // TODO 用 Spring RestClient 调 /chat/completions：
-        //  - Authorization: Bearer ${ai.api-key}
-        //  - body: {model, messages, response_format: {type: json_object}, temperature: 0.2}
-        //  - 单次超时 3s（ai.agent.step-timeout-ms），失败抛异常由 AgentLoop 降级
-        //  - apiKey 为空时直接抛 IllegalStateException，提示配置 DASHSCOPE_API_KEY
-        throw new UnsupportedOperationException("QwenChatClient 待实现，见 docs/11 §5.9");
+        if (apiKey == null || apiKey.isBlank()) {
+            throw new IllegalStateException("缺少 ai.api-key，请设置环境变量 DASHSCOPE_API_KEY");
+        }
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("model", textModel);
+        body.put("messages", messages);
+        body.put("temperature", 0.2);
+        // 强制 JSON 输出，降低"模型附带解释文字"导致解析失败的概率
+        body.put("response_format", Map.of("type", "json_object"));
+
+        JsonNode response = restClient.post()
+                .uri("/chat/completions")
+                .header("Authorization", "Bearer " + apiKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(body)
+                .retrieve()
+                .body(JsonNode.class);
+
+        if (response == null) {
+            throw new IllegalStateException("DashScope 返回空响应");
+        }
+        String content = response.path("choices").path(0).path("message").path("content").asText("");
+        if (content.isBlank()) {
+            throw new IllegalStateException("DashScope 响应缺少 choices[0].message.content");
+        }
+        return content;
     }
 }
