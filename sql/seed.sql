@@ -41,3 +41,6 @@ INSERT INTO sys_user_role (user_id, role_id) VALUES
 INSERT INTO dept_budget (dept_id, fiscal_year, period, total_amount, used_amount, frozen_amount) VALUES
   (2, 2026, '2026-10', 50000.00, 0.00, 0.00),
   (3, 2026, '2026-10', 20000.00, 0.00, 0.00);
+
+-- 2026-10 公司总预算池：部门分配之和不得超过它（管理端可调整）
+INSERT INTO budget_pool (period, total_amount) VALUES ('2026-10', 100000.00);

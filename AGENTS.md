@@ -29,8 +29,10 @@
 
 ## 3. 已确认的技术决策
 
-- 语言/框架：Java 17、Spring Boot 3、MyBatis-Plus；MySQL 8、Redis、RabbitMQ。
-- **前端：Thymeleaf 三页面**（提交 / 待办 / 详情），不引入 npm 工程。
+- 语言/框架：Java 17、**Spring Boot 4.1.1**、MyBatis-Plus；MySQL 8、Redis、RabbitMQ。
+- **前端：Vue3（Vite 工程，`frontend/`）七页面**（登录 / 我的报销单 / 新建编辑 / 详情 / 审批待办 / 付款单 / 发票复核）+ 管理后台 + 原生 CSS；dev 期 Vite proxy 转发 `/api`，build 产物可挂 Spring Boot `static/` 同源部署。设计见 `docs/14-前端设计.md`（2026-10-30 栀麦确认，替代原 Thymeleaf 方案）。
+- **AI 识别**：`InvoiceRecognizer` 接口 + 降级链，默认 `mock`，真实多模态 `qwen-vl` 可开关；切真模型步骤与成本护栏见 `docs/18-接入真实AI.md`。
+- **定时任务风格**：`@Scheduled` + cron 可配 + 开关可关（`OutboxRelay` / `ReconcileJob` / `ApprovalSlaJob`），单节点处理用 `TransactionTemplate` 独立事务。
 - **AI：直接 HTTP 调多模态模型**，封装 `InvoiceRecognizer` 接口（v2）。
 - **公网演示：内网穿透**，只暴露 8080；MySQL/Redis/RabbitMQ 端口一律不通。
 - 数据库迁移：Docker 启动挂载 `sql/schema.sql` + `sql/seed.sql`。

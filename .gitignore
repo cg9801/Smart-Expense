@@ -33,5 +33,14 @@ application-local.yml
 *.docx
 *.pdf
 
+# ---------- 前端（Vite 工程）----------
+frontend/node_modules/
+frontend/dist/
+frontend/.pnpm-store/
+.pnpm-store/
+
+# ---------- 发票本地存储（运行时生成，不进仓库）----------
+Smart-Expense/uploads/
+
 # sandbox diagnostics
 .dsh-acl-report/

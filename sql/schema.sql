@@ -87,12 +87,22 @@ CREATE TABLE dept_budget (
   CONSTRAINT ck_budget_no_overdraft CHECK (used_amount + frozen_amount <= total_amount)
 ) ENGINE=InnoDB COMMENT='部门预算';
 
+CREATE TABLE budget_pool (
+  id           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  period       CHAR(7)         NOT NULL COMMENT 'YYYY-MM，公司级月度总预算',
+  total_amount DECIMAL(14,2)   NOT NULL DEFAULT 0.00 COMMENT '总预算池，部门分配之和不得超过它',
+  created_at   DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at   DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_period (period)
+) ENGINE=InnoDB COMMENT='公司总预算池（按月），docs/06 §2.1';
+
 CREATE TABLE budget_txn (
   id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   budget_id  BIGINT UNSIGNED NOT NULL,
-  report_id  BIGINT UNSIGNED NOT NULL,
-  biz_no     VARCHAR(64)     NOT NULL COMMENT '幂等键：FREEZE:{reportId} / DEDUCT:{reportId} / RELEASE:{reportId}',
-  txn_type   VARCHAR(16)     NOT NULL COMMENT 'FREEZE/DEDUCT/RELEASE',
+  report_id  BIGINT UNSIGNED DEFAULT NULL COMMENT '预算调整流水没有单据，允许 NULL；冻结/扣减/释放必有',
+  biz_no     VARCHAR(64)     NOT NULL COMMENT '幂等键：FREEZE:{reportId}:{submitToken} / RELEASE:{reportId}:{submitToken} / DEDUCT:{reportId} / ADJUST:{budgetId}:{uuid}',
+  txn_type   VARCHAR(16)     NOT NULL COMMENT 'FREEZE/DEDUCT/RELEASE/ADJUST/ADJUST_ADD',
   amount     DECIMAL(14,2)   NOT NULL,
   created_at DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   PRIMARY KEY (id),
@@ -260,17 +270,21 @@ CREATE TABLE invoice (
   ocr_status    VARCHAR(16)     NOT NULL DEFAULT 'PENDING'
                 COMMENT 'PENDING/PROCESSING/SUCCESS/FAILED/MANUAL',
   confidence    DECIMAL(4,3)    DEFAULT NULL COMMENT '0.000-1.000，低于阈值转人工',
-  model_result  JSON            DEFAULT NULL COMMENT '模型原始结构化输出',
+  model_result  JSON            DEFAULT NULL COMMENT '识别结果：fields[] + needsReview + raw',
   error_msg     VARCHAR(512)    DEFAULT NULL,
   retry_count   INT             NOT NULL DEFAULT 0,
+  recognizer    VARCHAR(32)     DEFAULT NULL COMMENT 'mock / qwen-vl / cloud-ocr，实际产出实现',
+  degraded      TINYINT(1)      NOT NULL DEFAULT 0 COMMENT '是否走过降级链（主实现失败）',
   uploader_id   BIGINT UNSIGNED NOT NULL,
   reviewed_by   BIGINT UNSIGNED DEFAULT NULL,
   reviewed_at   DATETIME(3)     DEFAULT NULL,
   created_at    DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at    DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (id),
-  UNIQUE KEY uk_file_hash (file_hash),
+  -- 同人同图才复用；跨人同图允许落库并标记疑似重复报销（docs/11 §3.4 情形 2）
+  UNIQUE KEY uk_uploader_file_hash (uploader_id, file_hash),
   UNIQUE KEY uk_invoice_no (invoice_code, invoice_no),
+  KEY idx_file_hash (file_hash),
   KEY idx_report (report_id),
   KEY idx_ocr_status (ocr_status, created_at)
 ) ENGINE=InnoDB COMMENT='发票';

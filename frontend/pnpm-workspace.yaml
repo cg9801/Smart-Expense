@@ -1,0 +1,7 @@
+# pnpm 11+ 的设置新家（package.json 的 pnpm 字段已废弃）
+# hoisted 平铺布局：Windows 下 junction 不被 Node realpath，pnpm 隔离链接会导致
+# vite 内部 import 'esbuild'/'rollup' 解析失败；平铺后行为与 npm 一致
+nodeLinker: hoisted
+# esbuild 的 postinstall 只是校验二进制，放行让 vite 正常工作
+onlyBuiltDependencies:
+  - esbuild
