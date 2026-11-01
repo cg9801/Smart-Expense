@@ -39,6 +39,10 @@ frontend/dist/
 frontend/.pnpm-store/
 .pnpm-store/
 
+# 单端口部署产物（由 scripts/copy-frontend.ps1 生成，不进仓库）
+Smart-Expense/src/main/resources/static/index.html
+Smart-Expense/src/main/resources/static/assets/
+
 # ---------- 发票本地存储（运行时生成，不进仓库）----------
 Smart-Expense/uploads/
 

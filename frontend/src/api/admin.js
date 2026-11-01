@@ -27,3 +27,8 @@ export function listUsers() {
 export function updateUserRoles(userId, roles) {
   return put(`/api/v1/admin/users/${userId}/roles`, { roles })
 }
+
+/** 运营指标（含发票识别：成功率/复核率/降级率/P95），docs/10 + docs/19 §2 */
+export function getMetrics() {
+  return get('/api/v1/admin/metrics')
+}

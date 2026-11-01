@@ -33,6 +33,26 @@ spring:
         acknowledge-mode: manual
         prefetch: 10
         default-requeue-rejected: false
+  # 发票上传（v2 方案 A）：multipart 大小上限，文件落本地目录
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 12MB
+
+# 发票文件本地存储目录（相对启动目录；生产切 MinIO 时改实现，契约不变）
+app:
+  upload:
+    dir: ${UPLOAD_DIR:uploads}
+  # 发票识别链路（docs/11 §3）：默认 mock，接真实模型只改这里的开关与 key
+  invoice:
+    confidence-threshold: ${INVOICE_CONFIDENCE_THRESHOLD:0.85}
+    recognizer:
+      # 按顺序尝试：primary 失败/超时才降级到 fallback（docs/11 §3.2）
+      primary: ${INVOICE_RECOGNIZER_PRIMARY:mock}
+      fallback: ${INVOICE_RECOGNIZER_FALLBACK:}
+      timeout-ms: ${INVOICE_RECOGNIZER_TIMEOUT_MS:20000}
+      # true 时才注册 qwen-vl 识别器（需要 DASHSCOPE_API_KEY）
+      qwen-enabled: ${INVOICE_QWEN_ENABLED:false}
 
 # AI 审批 Copilot（docs/11 §5）。API Key 只从环境变量读取，禁止写进仓库。
 ai:
@@ -40,12 +60,21 @@ ai:
   base-url: ${AI_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
   api-key: ${DASHSCOPE_API_KEY:}
   text-model: ${AI_TEXT_MODEL:qwen-plus}
-  vl-model: ${AI_VL_MODEL:qwen-vl-max}
+  vl-model: ${AI_VL_MODEL:qwen3-vl-plus}   # 2026-10 实测可用；qwen-vl-max 已报 model_not_found
   agent:
     max-steps: 5
     total-timeout-ms: 8000
     step-timeout-ms: 3000
     max-tool-result-bytes: 2048
+
+# 审批 SLA（docs/02 §7）：定时扫描超时节点，先提醒后升级
+approval:
+  sla:
+    enabled: ${SLA_ENABLED:true}
+    # 每 10 分钟扫一次；cron 六段：秒 分 时 日 月 周
+    cron: ${SLA_CRON:0 */10 * * * *}
+    # 同一节点提醒间隔（小时），避免每轮扫描都写一条审计
+    remind-interval-hours: ${SLA_REMIND_HOURS:1}
 
 # 认证（docs/12）：mode=header 为兼容期，联调完成切 jwt
 auth:

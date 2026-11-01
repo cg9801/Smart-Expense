@@ -24,4 +24,13 @@ public interface AiReviewService {
      * @param reportVersion 事件发生时的 version，用于过期判定与幂等
      */
     void runAgent(Long reportId, Long reportVersion);
+
+    /**
+     * 手动重算建议（POST /admin/ai-review/refresh，排障用）：
+     * 删掉当前版本旧记录后重跑，绕过 runAgent 的"同版本幂等"。
+     * 仍然只写 ai_review，不影响审批。
+     *
+     * @return 重算后的建议；模型失败时返回 null（与 getAdvice 一致）
+     */
+    AiAdviceVO refresh(Long reportId);
 }

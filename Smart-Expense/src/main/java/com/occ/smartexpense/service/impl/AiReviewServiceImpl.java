@@ -3,18 +3,24 @@ package com.occ.smartexpense.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.occ.smartexpense.ai.AgentLoop;
 import com.occ.smartexpense.ai.AiAdviceValidator;
+import com.occ.smartexpense.common.BizException;
+import com.occ.smartexpense.common.ErrorCode;
 import com.occ.smartexpense.entity.AiReview;
 import com.occ.smartexpense.entity.DeptBudget;
 import com.occ.smartexpense.entity.ExpenseItem;
 import com.occ.smartexpense.entity.ExpenseReport;
+import com.occ.smartexpense.entity.Invoice;
+import com.occ.smartexpense.mapper.InvoiceMapper;
 import com.occ.smartexpense.enums.ReportStatus;
 import com.occ.smartexpense.mapper.AiReviewMapper;
 import com.occ.smartexpense.mapper.DeptBudgetMapper;
 import com.occ.smartexpense.mapper.ExpenseItemMapper;
 import com.occ.smartexpense.mapper.ExpenseReportMapper;
+import com.occ.smartexpense.mapper.InvoiceMapper;
 import com.occ.smartexpense.mapper.MqConsumeLogMapper;
 import com.occ.smartexpense.rule.HardFinding;
 import com.occ.smartexpense.rule.HardRuleEngine;
+import com.occ.smartexpense.rule.InvoiceFacts;
 import com.occ.smartexpense.rule.RiskMerger;
 import com.occ.smartexpense.service.AiReviewService;
 import com.occ.smartexpense.vo.AiAdviceVO;
@@ -55,6 +61,7 @@ public class AiReviewServiceImpl implements AiReviewService {
     private final ExpenseReportMapper reportMapper;
     private final ExpenseItemMapper itemMapper;
     private final DeptBudgetMapper deptBudgetMapper;
+    private final InvoiceMapper invoiceMapper;
     private final MqConsumeLogMapper consumeLogMapper;
     private final AgentLoop agentLoop;
     private final ObjectMapper objectMapper;
@@ -137,7 +144,24 @@ public class AiReviewServiceImpl implements AiReviewService {
                 .orderByAsc(ExpenseItem::getSortNo));
         DeptBudget budget = report.getBudgetId() == null
                 ? null : deptBudgetMapper.selectById(report.getBudgetId());
-        List<HardFinding> findings = hardRuleEngine.evaluate(report, items, budget);
+        // 发票查重事实由调用方查好（引擎保持纯函数，docs/19 §4）
+        List<Invoice> invoices = invoiceMapper.selectList(new LambdaQueryWrapper<Invoice>()
+                .eq(Invoice::getReportId, reportId));
+        int duplicateFileOtherUploaders = 0;
+        int duplicateInvoiceNoReuse = 0;
+        for (Invoice invoice : invoices) {
+            if (invoice.getFileHash() != null) {
+                duplicateFileOtherUploaders += invoiceMapper.countOtherUploadersByFileHash(
+                        invoice.getFileHash(), invoice.getUploaderId());
+            }
+            if (invoice.getInvoiceCode() != null && invoice.getInvoiceNo() != null) {
+                duplicateInvoiceNoReuse += invoiceMapper.countOtherReportsByInvoiceNo(
+                        invoice.getInvoiceCode(), invoice.getInvoiceNo(), reportId);
+            }
+        }
+        InvoiceFacts invoiceFacts = new InvoiceFacts(invoices.size(),
+                duplicateFileOtherUploaders, duplicateInvoiceNoReuse);
+        List<HardFinding> findings = hardRuleEngine.evaluate(report, items, budget, invoiceFacts);
 
         AgentLoop.AgentResult result;
         try {
@@ -164,6 +188,25 @@ public class AiReviewServiceImpl implements AiReviewService {
         } catch (DuplicateKeyException e) {
             log.info("AI 建议已存在，忽略 reportId={}, version={}", reportId, reportVersion);
         }
+    }
+
+    /**
+     * 手动重算：先删当前版本旧记录再跑，绕过 runAgent 的同版本幂等。
+     * 只在排障/模型升级后使用，正常链路仍然走 MQ 消费。
+     */
+    @Override
+    @Transactional
+    public AiAdviceVO refresh(Long reportId) {
+        ExpenseReport report = reportMapper.selectById(reportId);
+        if (report == null) {
+            throw new BizException(ErrorCode.NOT_FOUND, "报销单不存在");
+        }
+        long version = report.getVersion() == null ? 0L : report.getVersion().longValue();
+        aiReviewMapper.delete(new LambdaQueryWrapper<AiReview>()
+                .eq(AiReview::getReportId, reportId)
+                .eq(AiReview::getReportVersion, version));
+        runAgent(reportId, version);
+        return getAdvice(reportId);
     }
 
     /** 把 Agent 结果写到实体上：成功解析 final JSON，失败记 error */

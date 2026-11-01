@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
-import { listBudgets, adjustBudget, listUsers, updateUserRoles, getBudgetPool, setBudgetPool } from '../api/admin.js'
+import { listBudgets, adjustBudget, listUsers, updateUserRoles, getBudgetPool, setBudgetPool, getMetrics } from '../api/admin.js'
 import DonutChart from '../components/DonutChart.vue'
 
 const tab = ref('overview')
@@ -169,6 +169,20 @@ function bump(delta) {
 function refresh() {
   loadBudgets()
   loadPool()
+  loadMetrics()
+}
+
+// ---------- 运营指标（含发票识别，docs/19 §2）----------
+const metrics = ref(null)
+const metricsError = ref('')
+
+async function loadMetrics() {
+  metricsError.value = ''
+  try {
+    metrics.value = await getMetrics()
+  } catch (e) {
+    metricsError.value = e.message
+  }
 }
 
 // ---------- 用户与角色 ----------
@@ -270,6 +284,32 @@ onMounted(refresh)
           <div class="stat-label">可用额度</div>
           <div class="stat-value" style="color: var(--c-primary)">{{ money(summary.available) }}</div>
         </div>
+      </div>
+
+      <!-- 发票识别质量（docs/19 §2）：mock 环境仅演示，接真实模型后看这里 -->
+      <div class="card card-pad" style="display: flex; gap: 32px; flex-wrap: wrap; align-items: center">
+        <div>
+          <div class="stat-label">发票总数</div>
+          <div class="stat-value">{{ metrics?.invoiceTotal ?? '—' }}</div>
+        </div>
+        <div>
+          <div class="stat-label">识别成功率</div>
+          <div class="stat-value" style="color: var(--c-success)">{{ percent(metrics?.invoiceSuccessRate) }}</div>
+        </div>
+        <div>
+          <div class="stat-label">人工复核率</div>
+          <div class="stat-value" style="color: #b45309">{{ percent(metrics?.invoiceManualRate) }}</div>
+        </div>
+        <div>
+          <div class="stat-label">降级率</div>
+          <div class="stat-value" style="color: var(--c-danger)">{{ percent(metrics?.invoiceDegradedRate) }}</div>
+        </div>
+        <div>
+          <div class="stat-label">识别 P95</div>
+          <div class="stat-value">{{ metrics?.invoiceP95LatencyMs ?? '—' }} ms</div>
+        </div>
+        <span v-if="metricsError" style="color: var(--c-danger); font-size: 12px">{{ metricsError }}</span>
+        <span style="color: var(--c-text-3); font-size: 12px; margin-left: auto">mock 环境数字仅用于演示</span>
       </div>
 
       <!-- 总预算池：顶层约束，部门分配之和不得超过它 -->

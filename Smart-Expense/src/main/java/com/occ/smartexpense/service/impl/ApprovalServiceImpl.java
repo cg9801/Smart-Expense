@@ -10,6 +10,7 @@ import com.occ.smartexpense.entity.AiReview;
 import com.occ.smartexpense.entity.ExpenseApproval;
 import com.occ.smartexpense.entity.ExpenseReport;
 import com.occ.smartexpense.entity.ExpenseStatusLog;
+import com.occ.smartexpense.entity.SysDept;
 import com.occ.smartexpense.entity.SysUser;
 import com.occ.smartexpense.enums.ReportEvent;
 import com.occ.smartexpense.enums.ReportStatus;
@@ -17,6 +18,7 @@ import com.occ.smartexpense.mapper.AiReviewMapper;
 import com.occ.smartexpense.mapper.ExpenseApprovalMapper;
 import com.occ.smartexpense.mapper.ExpenseReportMapper;
 import com.occ.smartexpense.mapper.ExpenseStatusLogMapper;
+import com.occ.smartexpense.mapper.SysDeptMapper;
 import com.occ.smartexpense.mapper.SysUserMapper;
 import com.occ.smartexpense.service.ApprovalService;
 import com.occ.smartexpense.service.BudgetService;
@@ -25,6 +27,7 @@ import com.occ.smartexpense.service.ReportService;
 import com.occ.smartexpense.statemachine.ReportStateMachine;
 import com.occ.smartexpense.vo.ApprovalTodoVO;
 import com.occ.smartexpense.vo.ReportDetailVO;
+import com.occ.smartexpense.vo.TransferCandidateVO;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -59,6 +62,7 @@ public class ApprovalServiceImpl implements ApprovalService {
     /** 末级通过写 Outbox 事件（docs/07 §5） */
     private final OutboxService outboxService;
     private final SysUserMapper sysUserMapper;
+    private final SysDeptMapper sysDeptMapper;
     private final ObjectMapper objectMapper;
 
     @Override
@@ -78,6 +82,29 @@ public class ApprovalServiceImpl implements ApprovalService {
         }
         List<ApprovalTodoVO> records = approvalMapper.selectPending(approverId, offset, size);
         return PageResult.of(records, total, page, size);
+    }
+
+    @Override
+    public PageResult<ApprovalTodoVO> listHandled(Long approverId, int page, int size) {
+        if (page < 1) {
+            page = 1;
+        }
+        if (size < 1) {
+            size = 10;
+        } else if (size > 100) {
+            size = 100;
+        }
+        int offset = (page - 1) * size;
+        long total = approvalMapper.countHandled(approverId);
+        if (total == 0) {
+            return PageResult.empty(page, size);
+        }
+        return PageResult.of(approvalMapper.selectHandled(approverId, offset, size), total, page, size);
+    }
+
+    @Override
+    public List<TransferCandidateVO> listTransferCandidates(Long selfId, Long reportId) {
+        return sysUserMapper.selectTransferCandidates(selfId, reportId);
     }
 
     @Override
@@ -226,11 +253,92 @@ public class ApprovalServiceImpl implements ApprovalService {
     }
 
     /**
+     * 转交（docs/02 §5）：原行 PENDING → TRANSFERRED，插入同 step_no 的新 PENDING 行。
+     * 不改变单据状态；目标不得是本单历史审批人（防环）。
+     */
+    @Override
+    @Transactional
+    public ReportDetailVO transfer(Long approvalId, Long userId, Long targetUserId, String comment) {
+        // 1 守卫：节点存在、属于我、且 PENDING（loadPendingNode 已覆盖）
+        ExpenseApproval node = loadPendingNode(approvalId, userId);
+
+        // 2 守卫：目标存在且在职，不能转给自己
+        if (targetUserId == null) {
+            throw new BizException(ErrorCode.PARAM_ERROR, "转交目标用户不能为空");
+        }
+        if (targetUserId.equals(userId)) {
+            throw new BizException(ErrorCode.PARAM_ERROR, "不能转交给自己");
+        }
+        SysUser target = sysUserMapper.selectById(targetUserId);
+        if (target == null) {
+            throw new BizException(ErrorCode.NOT_FOUND, "转交目标用户不存在");
+        }
+        if (target.getStatus() != null && target.getStatus() == 0) {
+            throw new BizException(ErrorCode.PARAM_ERROR, "转交目标用户已离职");
+        }
+
+        // 3 防环：目标不能是本单任意历史审批人，否则甲乙互转会死循环
+        Long historical = approvalMapper.selectCount(new LambdaQueryWrapper<ExpenseApproval>()
+                .eq(ExpenseApproval::getReportId, node.getReportId())
+                .eq(ExpenseApproval::getApproverId, targetUserId));
+        if (historical != null && historical > 0) {
+            throw new BizException(ErrorCode.STATE_ILLEGAL, "不能转交给本单历史审批人（防环）");
+        }
+
+        LocalDateTime now = LocalDateTime.now();
+        // 4 原行条件更新 PENDING → TRANSFERRED，并发重复转交只有一次成功
+        int affect = approvalMapper.update(null, new LambdaUpdateWrapper<ExpenseApproval>()
+                .eq(ExpenseApproval::getId, approvalId)
+                .eq(ExpenseApproval::getStatus, "PENDING")
+                .set(ExpenseApproval::getStatus, "TRANSFERRED")
+                .set(ExpenseApproval::getActedAt, now)
+                .set(comment != null && !comment.isBlank(), ExpenseApproval::getComment, comment));
+        if (affect == 0) {
+            throw new BizException(ErrorCode.STATE_ILLEGAL, "该节点已处理");
+        }
+
+        // 5 插入新行：同 step_no，继承 SLA 与来源角色，transfer_from_id 指回原行
+        String deptName = deptName(target.getDeptId());
+        ExpenseApproval fresh = new ExpenseApproval();
+        fresh.setReportId(node.getReportId());
+        fresh.setStepNo(node.getStepNo());
+        fresh.setStepName(node.getStepName());
+        fresh.setApprovalMode(node.getApprovalMode());
+        fresh.setApproverId(target.getId());
+        fresh.setApproverName(target.getRealName());
+        fresh.setApproverDeptName(deptName == null ? "" : deptName);
+        fresh.setSourceRole(node.getSourceRole());
+        fresh.setStatus("PENDING");
+        fresh.setDeadlineAt(node.getDeadlineAt());
+        fresh.setTransferFromId(node.getId());
+        approvalMapper.insert(fresh);
+
+        // 6 审计：转交不改变单据状态，from = to = 当前状态（docs/02 §8）
+        ExpenseReport report = requireReport(node.getReportId());
+        writeStatusLog(report.getId(), "TRANSFER", report.getStatus(), report.getStatus(),
+                userId, node.getApproverName(),
+                "{\"stepNo\":" + node.getStepNo()
+                        + ",\"approvalId\":" + node.getId()
+                        + ",\"newApprovalId\":" + fresh.getId()
+                        + ",\"targetUserId\":" + targetUserId
+                        + (comment != null ? ",\"comment\":\"" + escapeJson(comment) + "\"" : "") + "}");
+        return reportService.getDetail(report.getId());
+    }
+
+    /** 目标用户的部门名快照（组织调整不影响在途节点展示） */
+    private String deptName(Long deptId) {
+        if (deptId == null) {
+            return null;
+        }
+        SysDept dept = sysDeptMapper.selectById(deptId);
+        return dept == null ? null : dept.getName();
+    }
+
+    /**
      * 通过规则（docs/02 §4）：作废/转交/跳过不参与计算。
      * SINGLE 看本人，AND 要求非空且全通过，OR 任一通过即可。
      */
-    private boolean judgeStepPassed(String mode, List<ExpenseApproval> stepNodes, Long currentId) {
-        List<ExpenseApproval> effective = stepNodes.stream()
+    private boolean judgeStepPassed(String mode, List<ExpenseApproval> stepNodes, Long currentId) {        List<ExpenseApproval> effective = stepNodes.stream()
                 .filter(n -> !"CANCELLED".equals(n.getStatus())
                         && !"TRANSFERRED".equals(n.getStatus())
                         && !"SKIPPED".equals(n.getStatus()))

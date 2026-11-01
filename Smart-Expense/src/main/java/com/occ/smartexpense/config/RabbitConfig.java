@@ -38,6 +38,12 @@ public class RabbitConfig {
     public static final String AI_DLQ_QUEUE = "se.ai-review.dlq";
     public static final String AI_DLQ_ROUTING_KEY = "ai-review.dead";
 
+    /** 发票识别：上传事件 → 异步识别（docs/11 §3.1） */
+    public static final String INVOICE_UPLOADED_ROUTING_KEY = "invoice.uploaded";
+    public static final String INVOICE_RECOGNIZE_QUEUE = "se.invoice.recognize.queue";
+    public static final String INVOICE_DLQ_QUEUE = "se.invoice.recognize.dlq";
+    public static final String INVOICE_DLQ_ROUTING_KEY = "invoice.dead";
+
     public static final String DLX_EXCHANGE = "se.dlx.exchange";
     public static final String DLQ_QUEUE = "se.payment.dlq";
     public static final String DLQ_ROUTING_KEY = "payment.dead";
@@ -98,6 +104,30 @@ public class RabbitConfig {
     @Bean
     public Binding aiReviewDlqBinding() {
         return BindingBuilder.bind(aiReviewDlq()).to(dlxExchange()).with(AI_DLQ_ROUTING_KEY);
+    }
+
+    /** 发票识别队列：上传事件 → 识别消费者；消费异常进自己的死信 */
+    @Bean
+    public Queue invoiceRecognizeQueue() {
+        return QueueBuilder.durable(INVOICE_RECOGNIZE_QUEUE)
+                .deadLetterExchange(DLX_EXCHANGE)
+                .deadLetterRoutingKey(INVOICE_DLQ_ROUTING_KEY)
+                .build();
+    }
+
+    @Bean
+    public Queue invoiceDlq() {
+        return QueueBuilder.durable(INVOICE_DLQ_QUEUE).build();
+    }
+
+    @Bean
+    public Binding invoiceRecognizeBinding() {
+        return BindingBuilder.bind(invoiceRecognizeQueue()).to(reportExchange()).with(INVOICE_UPLOADED_ROUTING_KEY);
+    }
+
+    @Bean
+    public Binding invoiceDlqBinding() {
+        return BindingBuilder.bind(invoiceDlq()).to(dlxExchange()).with(INVOICE_DLQ_ROUTING_KEY);
     }
 
     /**

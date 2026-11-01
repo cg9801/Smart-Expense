@@ -1,6 +1,6 @@
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
-import { listInvoices, reviewInvoice, retryInvoice } from '../api/invoice.js'
+import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { listInvoices, reviewInvoice, retryInvoice, fetchInvoiceBlobUrl } from '../api/invoice.js'
 import StatusTag from '../components/StatusTag.vue'
 
 const rows = ref([])
@@ -21,6 +21,7 @@ const statusOptions = [
 const dialog = reactive({
   visible: false,
   row: null,
+  previewUrl: '',
   form: { invoiceCode: '', invoiceNo: '', invoiceDate: '', amount: '', taxAmount: '' }
 })
 const dialogError = ref('')
@@ -57,7 +58,33 @@ function openReview(row) {
   }
   dialogError.value = ''
   dialog.visible = true
+  loadPreview(row.id)
 }
+
+// 发票图片预览（docs/19 §1.6）：文件接口要 Bearer，只能 fetch blob 后给 <img>
+const previewUrl = ref('')
+
+async function loadPreview(invoiceId) {
+  try {
+    const url = await fetchInvoiceBlobUrl(invoiceId)
+    dialog.previewUrl = url
+  } catch {
+    dialog.previewUrl = ''
+  }
+}
+
+async function viewImage(row) {
+  try {
+    previewUrl.value = await fetchInvoiceBlobUrl(row.id)
+  } catch (e) {
+    error.value = e
+  }
+}
+
+onBeforeUnmount(() => {
+  if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
+  if (dialog.previewUrl) URL.revokeObjectURL(dialog.previewUrl)
+})
 
 async function submitReview() {
   if (!dialog.form.amount || Number(dialog.form.amount) <= 0) {
@@ -158,6 +185,7 @@ onMounted(load)
               <td style="color: var(--c-danger); font-size: 12px">{{ r.errorMsg || '—' }}</td>
               <td>
                 <div style="display: flex; gap: 6px">
+                  <button class="btn btn-outline btn-sm" @click="viewImage(r)">看票</button>
                   <button
                     v-if="r.ocrStatus === 'MANUAL' || r.ocrStatus === 'SUCCESS'"
                     class="btn btn-primary btn-sm"
@@ -191,7 +219,22 @@ onMounted(load)
     <div v-if="dialog.visible" class="modal-mask" @click.self="dialog.visible = false">
       <div class="modal">
         <h3 class="modal-title">🧾 复核发票 #{{ dialog.row?.id }}</h3>
+        <div v-if="dialog.row?.recognizer === 'mock'" class="alert alert-info" style="margin-bottom: 10px">
+          当前是 mock 识别器：金额/日期是演示数据，不是真实 OCR 结果。接真实模型见 docs/18。
+        </div>
         <div v-if="dialogError" class="alert alert-error" style="margin-bottom: 12px">{{ dialogError }}</div>
+
+        <!-- 发票图片：对照识别字段核对（docs/19 §1.6） -->
+        <div style="margin-bottom: 14px; display: flex; gap: 12px; align-items: flex-start">
+          <img v-if="dialog.previewUrl" :src="dialog.previewUrl" class="invoice-preview-inline"
+               alt="发票图片" title="点击查看大图" @click="previewUrl = dialog.previewUrl" />
+          <div v-else style="font-size: 12px; color: var(--c-text-3); padding: 8px 0">
+            图片加载中…（PDF 请点开原文件查看）
+          </div>
+          <div style="font-size: 12px; color: var(--c-text-3); line-height: 1.6">
+            对照左侧图片修改右侧字段；只改发票，不回写报销单。
+          </div>
+        </div>
 
         <div class="form-item">
           <label class="form-label">发票代码</label>
@@ -221,6 +264,12 @@ onMounted(load)
           </button>
         </div>
       </div>
+    </div>
+
+    <!-- 大图预览：点击遮罩关闭（docs/19 §1.6） -->
+    <div v-if="previewUrl" class="invoice-preview-mask" @click="previewUrl = ''">
+      <img :src="previewUrl" alt="发票大图" />
+      <span class="invoice-preview-hint">点击空白处关闭</span>
     </div>
   </div>
 </template>

@@ -1,11 +1,13 @@
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { listPending, approve, reject, transfer, listTransferCandidates } from '../api/approval.js'
+import { listPending, listHandled, approve, reject, transfer, listTransferCandidates } from '../api/approval.js'
 import StatusTag from '../components/StatusTag.vue'
 
 const router = useRouter()
 
+// Tab：待办（PENDING）/ 已办（APPROVED/REJECTED/TRANSFERRED），docs/03 §2.3
+const tab = ref('pending')
 const rows = ref([])
 const loading = ref(true)
 const error = ref(null)
@@ -22,7 +24,9 @@ const candidatesLoading = ref(false)
 async function load() {
   loading.value = true
   try {
-    const data = await listPending({ page: page.current, size: page.size })
+    const data = tab.value === 'pending'
+      ? await listPending({ page: page.current, size: page.size })
+      : await listHandled({ page: page.current, size: page.size })
     rows.value = data?.records || []
     page.total = data?.total || 0
     error.value = null
@@ -32,6 +36,14 @@ async function load() {
   } finally {
     loading.value = false
   }
+}
+
+function switchTab(name) {
+  if (tab.value === name) return
+  tab.value = name
+  page.current = 1
+  rows.value = []
+  load()
 }
 
 function openDialog(mode, row) {
@@ -107,9 +119,18 @@ onMounted(load)
   <div>
     <div class="page-head">
       <div>
-        <h2 class="page-title">审批待办</h2>
-        <p class="page-sub">按截止时间升序；会签场景下他人已批会自动跳过</p>
+        <h2 class="page-title">{{ tab === 'pending' ? '审批待办' : '我的已办' }}</h2>
+        <p class="page-sub">
+          {{ tab === 'pending'
+            ? '按截止时间升序；会签场景下他人已批会自动跳过'
+            : '我处理过的节点（含转交），按处理时间倒序' }}
+        </p>
       </div>
+    </div>
+
+    <div style="display: flex; gap: 8px; margin-bottom: 12px">
+      <button class="btn btn-sm" :class="tab === 'pending' ? 'btn-primary' : 'btn-outline'" @click="switchTab('pending')">待办</button>
+      <button class="btn btn-sm" :class="tab === 'handled' ? 'btn-primary' : 'btn-outline'" @click="switchTab('handled')">已办</button>
     </div>
 
     <div v-if="error" class="alert alert-error">
@@ -123,7 +144,9 @@ onMounted(load)
           <thead>
             <tr>
               <th>单号</th><th>标题</th><th>申请人</th><th>级别</th>
-              <th class="num">金额</th><th>截止时间</th><th>操作</th>
+              <th class="num">金额</th>
+              <th v-if="tab === 'pending'">截止时间</th><th v-else>处理时间</th>
+              <th v-if="tab === 'pending'">操作</th><th v-else>状态 / 意见</th>
             </tr>
           </thead>
           <tbody>
@@ -134,7 +157,7 @@ onMounted(load)
               <td colspan="7">
                 <div class="empty">
                   <div class="empty-icon">🎉</div>
-                  {{ error ? '加载失败' : '没有待办，喝茶去吧' }}
+                  {{ error ? '加载失败' : (tab === 'pending' ? '没有待办，喝茶去吧' : '还没有处理记录') }}
                 </div>
               </td>
             </tr>
@@ -146,13 +169,17 @@ onMounted(load)
               <td>{{ r.applicantName }}</td>
               <td>{{ r.stepNo }} · {{ r.stepName }}</td>
               <td class="num">¥ {{ Number(r.amountTotal ?? 0).toFixed(2) }}</td>
-              <td style="color: var(--c-text-2)">{{ r.deadlineAt }}</td>
-              <td>
+              <td style="color: var(--c-text-2)">{{ tab === 'pending' ? r.deadlineAt : r.actedAt }}</td>
+              <td v-if="tab === 'pending'">
                 <div style="display: flex; gap: 6px">
                   <button class="btn btn-primary btn-sm" @click="openDialog('approve', r)">通过</button>
                   <button class="btn btn-danger btn-sm" @click="openDialog('reject', r)">驳回</button>
                   <button class="btn btn-outline btn-sm" @click="openDialog('transfer', r)">转交</button>
                 </div>
+              </td>
+              <td v-else>
+                <StatusTag :status="r.status" kind="node" />
+                <span style="margin-left: 6px; color: var(--c-text-2); font-size: 12px">{{ r.comment || '—' }}</span>
               </td>
             </tr>
           </tbody>

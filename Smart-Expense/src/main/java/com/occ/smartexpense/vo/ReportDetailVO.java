@@ -43,4 +43,7 @@ public class ReportDetailVO {
 
     /** AI 审批建议：缺失时为 null，前端显示"暂无 AI 建议"（docs/11 §5.7） */
     private AiAdviceVO aiAdvice;/** AI 建议 **/
+
+    /** 该单关联的发票（v2 方案 A：上传后绑定，审批人可核对） */
+    private List<InvoiceVO> invoices;
 }

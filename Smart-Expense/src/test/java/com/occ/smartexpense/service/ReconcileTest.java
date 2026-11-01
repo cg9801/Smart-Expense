@@ -82,12 +82,13 @@ class ReconcileTest {
     }
 
 
-    // 缺实扣流水，且冻结额度不够 → BUDGET_NOT_DEDUCTED 保持 OPEN，detail 里含 repairError
+    // 缺实扣流水，且预算行不存在 → BUDGET_NOT_DEDUCTED 保持 OPEN，detail 里含 repairError
     @Test
-    @DisplayName("TODO：缺实扣且冻结不足 → OPEN + repairError")
+    @DisplayName("缺实扣且预算行不可用 → OPEN + repairError")
     void budgetNotDeducted_repairFails() {
-        // TODO 你来写
-        ExpenseReport report = approvedReport("2000", true, 1L);
+        // 用不存在的 budgetId：deduct 条件更新 0 行 → 修复失败保持 OPEN。
+        // 不要依赖 seed 预算行的 frozen（运行库可能残留冻结，会让"修复"意外成功）
+        ExpenseReport report = approvedReport("2000", true, 999999L);
 
         reconcileService.run(BIZ_DATE);
         List<ReconcileDiff> diffs = diffsOf(report.getId());

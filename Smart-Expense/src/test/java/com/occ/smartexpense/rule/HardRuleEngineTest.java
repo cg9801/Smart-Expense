@@ -126,6 +126,44 @@ class HardRuleEngineTest {
                 .anyMatch(f -> f.message().contains("明细")));
     }
 
+    // ---------- 发票查重（docs/19 §4）----------
+
+    @Test
+    void duplicateFileFromOtherUploader_isDetected() {
+        ExpenseReport report = report("差旅", "TRAVEL", "1500.00");
+        List<ExpenseItem> items = List.of(item(1, "1500.00"));
+        InvoiceFacts facts = new InvoiceFacts(1, 1, 0);
+
+        List<HardFinding> findings = engine.evaluate(report, items, null, facts);
+
+        HardFinding finding = findings.stream()
+                .filter(f -> HardRuleEngine.DUPLICATE_FILE_SUSPECT.equals(f.code()))
+                .findFirst().orElseThrow();
+        assertEquals(Severity.HIGH, finding.severity());
+        assertTrue(finding.message().contains("1"));
+    }
+
+    @Test
+    void duplicateInvoiceNoReuse_isDetected() {
+        ExpenseReport report = report("差旅", "TRAVEL", "1500.00");
+        List<ExpenseItem> items = List.of(item(1, "1500.00"));
+        InvoiceFacts facts = new InvoiceFacts(1, 0, 2);
+
+        List<HardFinding> findings = engine.evaluate(report, items, null, facts);
+
+        assertTrue(findings.stream()
+                .anyMatch(f -> HardRuleEngine.DUPLICATE_INVOICE_SUSPECT.equals(f.code())));
+    }
+
+    @Test
+    void invoiceFactsWithoutInvoices_producesNothing() {
+        ExpenseReport report = report("差旅", "TRAVEL", "1500.00");
+        List<ExpenseItem> items = List.of(item(1, "1500.00"));
+
+        // 没有发票时，即使事实里带计数也不该产出（调用方传 0 是正常，传脏数据也不阻断）
+        assertTrue(engine.evaluate(report, items, null, new InvoiceFacts(0, 3, 3)).isEmpty());
+    }
+
     // ---------- 兜底 ----------
 
     @Test

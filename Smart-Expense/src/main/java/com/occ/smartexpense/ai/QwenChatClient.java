@@ -35,8 +35,7 @@ public class QwenChatClient implements AiChatClient {
     private final String apiKey;
     private final String textModel;
 
-    public QwenChatClient(RestClient.Builder builder,
-                          @Value("${ai.base-url:https://dashscope.aliyuncs.com/compatible-mode/v1}") String baseUrl,
+    public QwenChatClient(@Value("${ai.base-url:https://dashscope.aliyuncs.com/compatible-mode/v1}") String baseUrl,
                           @Value("${ai.api-key:}") String apiKey,
                           @Value("${ai.text-model:qwen-plus}") String textModel,
                           @Value("${ai.agent.step-timeout-ms:3000}") long stepTimeoutMs) {
@@ -46,7 +45,9 @@ public class QwenChatClient implements AiChatClient {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(Duration.ofMillis(stepTimeoutMs));
         factory.setReadTimeout(Duration.ofMillis(stepTimeoutMs));
-        this.restClient = builder.baseUrl(baseUrl).requestFactory(factory).build();
+        // 不注入 RestClient.Builder：本项目没有 webclient starter，拿不到自动配置的 Builder，
+        // 一旦 ai.provider=qwen 就会启动失败（2026-10-31 实测）
+        this.restClient = RestClient.builder().baseUrl(baseUrl).requestFactory(factory).build();
     }
 
     @Override

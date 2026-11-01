@@ -26,7 +26,7 @@ public class BudgetTxn {
     /** 幂等键，唯一索引 uk_biz_no */
     private String bizNo;
 
-    /** FREEZE / DEDUCT / RELEASE */
+    /** FREEZE / DEDUCT / RELEASE / ADJUST（覆盖式调整）/ ADJUST_ADD（追加） */
     private String txnType;
 
     /** 永远存正数，方向由 txnType 表达 */

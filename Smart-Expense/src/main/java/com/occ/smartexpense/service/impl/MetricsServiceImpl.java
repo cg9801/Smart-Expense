@@ -7,6 +7,7 @@ import com.occ.smartexpense.entity.PaymentOrder;
 import com.occ.smartexpense.entity.ReconcileDiff;
 import com.occ.smartexpense.mapper.AiReviewMapper;
 import com.occ.smartexpense.mapper.ExpenseReportMapper;
+import com.occ.smartexpense.mapper.InvoiceMapper;
 import com.occ.smartexpense.mapper.OutboxMessageMapper;
 import com.occ.smartexpense.mapper.PaymentOrderMapper;
 import com.occ.smartexpense.mapper.ReconcileDiffMapper;
@@ -39,6 +40,7 @@ public class MetricsServiceImpl implements MetricsService {
     private final ReconcileDiffMapper reconcileDiffMapper;
     private final OutboxMessageMapper outboxMessageMapper;
     private final AiReviewMapper aiReviewMapper;
+    private final InvoiceMapper invoiceMapper;
 
     @Override
     public MetricsVO overview() {
@@ -87,6 +89,17 @@ public class MetricsServiceImpl implements MetricsService {
         // 工具调用成功率：分母是累计调用次数，没调用过时返回 0
         long toolCalls = longOf(ai, "tool_calls_sum");
         vo.setAiToolSuccessRate(ratio(toolCalls - longOf(ai, "tool_errors_sum"), toolCalls));
+
+        // ⑩ 发票识别指标（docs/19 §2）：分母用全部发票，包含还没识别的 PENDING
+        vo.setInvoiceTotal(invoiceMapper.countAll());
+        long invoiceTotal = vo.getInvoiceTotal();
+        vo.setInvoiceSuccessRate(ratio(invoiceMapper.countByStatus("SUCCESS"), invoiceTotal));
+        vo.setInvoiceManualRate(ratio(invoiceMapper.countByStatus("MANUAL"), invoiceTotal));
+        vo.setInvoiceDegradedRate(ratio(invoiceMapper.countDegraded(), invoiceTotal));
+        Integer p95 = invoiceMapper.selectP95LatencyMs();
+        vo.setInvoiceP95LatencyMs(p95 == null
+                ? BigDecimal.ZERO.setScale(1, RoundingMode.HALF_UP)
+                : BigDecimal.valueOf(p95).setScale(1, RoundingMode.HALF_UP));
 
         return vo;
     }

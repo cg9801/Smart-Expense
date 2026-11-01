@@ -29,4 +29,10 @@ public class ApprovalTodoVO {
 
     private String status;
 
+    /** 已办列表用：处理时间与审批意见（待办为空） */
+    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
+    private LocalDateTime actedAt;
+
+    private String comment;
+
 }

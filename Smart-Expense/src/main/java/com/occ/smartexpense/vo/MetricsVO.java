@@ -50,4 +50,21 @@ public class MetricsVO {
     /** 工具调用成功率 = (tool_calls - tool_errors) ÷ tool_calls，保留 2 位小数 */
     private BigDecimal aiToolSuccessRate;
 
+    // ===== 发票识别指标（docs/19 §2）=====
+
+    /** 发票总数（含未识别） */
+    private long invoiceTotal;
+
+    /** 识别成功率 = SUCCESS ÷ invoiceTotal */
+    private BigDecimal invoiceSuccessRate;
+
+    /** 人工复核率 = MANUAL ÷ invoiceTotal（主实现质量的直接体现） */
+    private BigDecimal invoiceManualRate;
+
+    /** 降级率 = degraded=1 ÷ invoiceTotal（主实现可用率的反面） */
+    private BigDecimal invoiceDegradedRate;
+
+    /** 识别耗时 P95（毫秒），保留 1 位小数 */
+    private BigDecimal invoiceP95LatencyMs;
+
 }

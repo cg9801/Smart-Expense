@@ -20,4 +20,7 @@ public class ReportItemVO {
     private BigDecimal amount;
 
     private String description;
+
+    /** 关联发票 id（v2 方案 A），编辑页回填用 */
+    private Long invoiceId;
 }

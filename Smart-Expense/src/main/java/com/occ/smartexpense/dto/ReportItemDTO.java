@@ -25,4 +25,7 @@ public class ReportItemDTO {
     private BigDecimal amount;
 
     private String description;
+
+    /** 可选：关联的发票 id（先调 POST /invoices/upload 拿到，见 docs/03 §2.5） */
+    private Long invoiceId;
 }

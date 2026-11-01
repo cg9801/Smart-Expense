@@ -275,6 +275,7 @@ CREATE TABLE invoice (
   retry_count   INT             NOT NULL DEFAULT 0,
   recognizer    VARCHAR(32)     DEFAULT NULL COMMENT 'mock / qwen-vl / cloud-ocr，实际产出实现',
   degraded      TINYINT(1)      NOT NULL DEFAULT 0 COMMENT '是否走过降级链（主实现失败）',
+  latency_ms    INT             DEFAULT NULL COMMENT '单次识别耗时（毫秒），P95 指标用；不含 MQ 排队',
   uploader_id   BIGINT UNSIGNED NOT NULL,
   reviewed_by   BIGINT UNSIGNED DEFAULT NULL,
   reviewed_at   DATETIME(3)     DEFAULT NULL,
@@ -283,7 +284,8 @@ CREATE TABLE invoice (
   PRIMARY KEY (id),
   -- 同人同图才复用；跨人同图允许落库并标记疑似重复报销（docs/11 §3.4 情形 2）
   UNIQUE KEY uk_uploader_file_hash (uploader_id, file_hash),
-  UNIQUE KEY uk_invoice_no (invoice_code, invoice_no),
+  -- 票号重复不拒绝落库，交给硬规则 DUPLICATE_INVOICE_SUSPECT 提示（docs/19 §4）
+  KEY idx_invoice_no (invoice_code, invoice_no),
   KEY idx_file_hash (file_hash),
   KEY idx_report (report_id),
   KEY idx_ocr_status (ocr_status, created_at)

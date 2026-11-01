@@ -77,11 +77,12 @@ public class OutboxRelay {
         );
     }
 
-    /** 按事件类型选路由键：提交 → AI 审核队列，通过 → 付款队列（docs/11 §5.2） */
+    /** 按事件类型选路由键：提交 → AI 审核队列，通过 → 付款队列，上传 → 发票识别队列 */
     private String routingKeyOf(String eventType) {
         return switch (eventType) {
             case "REPORT_APPROVED" -> RabbitConfig.REPORT_APPROVED_ROUTING_KEY;
             case "REPORT_SUBMITTED" -> RabbitConfig.REPORT_SUBMITTED_ROUTING_KEY;
+            case "INVOICE_UPLOADED" -> RabbitConfig.INVOICE_UPLOADED_ROUTING_KEY;
             default -> throw new IllegalArgumentException("未知事件类型: " + eventType);
         };
     }

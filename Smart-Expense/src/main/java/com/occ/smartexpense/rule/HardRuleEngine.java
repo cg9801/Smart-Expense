@@ -18,7 +18,7 @@ import java.util.List;
  * <p><b>只产出、不阻断</b>：结果同时进 Agent 初始上下文（§5.3）和 {@code ai_review.hard_findings}，
  * 任何情况下都不改单据状态、不抛业务异常。
  *
- * <p>未实现（依赖发票线，见 §3.4）：{@code DUPLICATE_FILE_SUSPECT}、{@code DUPLICATE_INVOICE_SUSPECT}。
+ * <p>发票类规则（{@code DUPLICATE_*}）依赖调用方查好的 {@link InvoiceFacts}，见 docs/19 §4。
  */
 @Component
 public class HardRuleEngine {
@@ -27,15 +27,27 @@ public class HardRuleEngine {
     public static final String BUDGET_EXCEEDED = "BUDGET_EXCEEDED";
     public static final String ITEM_AMOUNT_INVALID = "ITEM_AMOUNT_INVALID";
     public static final String MISSING_REQUIRED_FIELD = "MISSING_REQUIRED_FIELD";
+    public static final String DUPLICATE_FILE_SUSPECT = "DUPLICATE_FILE_SUSPECT";
+    public static final String DUPLICATE_INVOICE_SUSPECT = "DUPLICATE_INVOICE_SUSPECT";
 
     /**
-     * 跑一遍全部规则。
+     * 跑一遍全部规则（兼容旧调用：不传发票事实时跳过发票类规则）。
      *
      * @param report 单据（为空时直接返回空结果，不阻断）
      * @param items  明细（为空视同"没有明细行"）
      * @param budget 单据冻结的部门预算（为空表示没有预算记录，跳过该规则）
      */
     public List<HardFinding> evaluate(ExpenseReport report, List<ExpenseItem> items, DeptBudget budget) {
+        return evaluate(report, items, budget, null);
+    }
+
+    /**
+     * 带发票事实的全量规则。
+     *
+     * @param facts 发票查重事实；为空表示没有发票上下文，跳过发票类规则
+     */
+    public List<HardFinding> evaluate(ExpenseReport report, List<ExpenseItem> items,
+                                      DeptBudget budget, InvoiceFacts facts) {
         if (report == null) {
             return List.of();
         }
@@ -46,6 +58,7 @@ public class HardRuleEngine {
         checkAmountTotal(report, safeItems, findings);
         checkBudget(report, budget, findings);
         checkRequiredFields(report, safeItems, findings);
+        checkDuplicateInvoices(facts, findings);
 
         return findings;
     }
@@ -108,6 +121,22 @@ public class HardRuleEngine {
         if (!missing.isEmpty()) {
             findings.add(new HardFinding(MISSING_REQUIRED_FIELD, Severity.LOW,
                     "缺少必填字段：" + String.join("、", missing)));
+        }
+    }
+
+    /** 发票查重（docs/19 §4）：同一规则只产出一条，不按发票逐条刷屏 */
+    private void checkDuplicateInvoices(InvoiceFacts facts, List<HardFinding> findings) {
+        if (facts == null || facts.invoiceCount() <= 0) {
+            return;
+        }
+        if (facts.duplicateFileOtherUploaders() > 0) {
+            findings.add(new HardFinding(DUPLICATE_FILE_SUSPECT, Severity.HIGH,
+                    "发票文件与其他人上传的重复 " + facts.duplicateFileOtherUploaders()
+                            + " 次，疑似一票多报"));
+        }
+        if (facts.duplicateInvoiceNoReuse() > 0) {
+            findings.add(new HardFinding(DUPLICATE_INVOICE_SUSPECT, Severity.HIGH,
+                    "发票号码已被其他报销单使用 " + facts.duplicateInvoiceNoReuse() + " 次"));
         }
     }
 

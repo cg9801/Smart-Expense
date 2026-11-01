@@ -129,7 +129,7 @@ class ReportSubmitWithdrawTest {
         ReportDetailVO draft = createDraft();
         reportService.submitReport(draft.getId(), "idem-withdraw", "trace-submit");
 
-        ReportDetailVO withdrawn = reportService.withdrawReport(draft.getId(), "trace-withdraw");
+        ReportDetailVO withdrawn = reportService.withdrawReport(draft.getId(), APPLICANT_ID, "trace-withdraw");
 
         assertEquals("DRAFT", withdrawn.getStatus());
         assertEquals(0, withdrawn.getCurrentStep());
@@ -158,11 +158,24 @@ class ReportSubmitWithdrawTest {
     void withdraw_again_after_withdraw_is_state_illegal() {
         ReportDetailVO draft = createDraft();
         reportService.submitReport(draft.getId(), "idem-withdraw-twice", null);
-        reportService.withdrawReport(draft.getId(), null);
+        reportService.withdrawReport(draft.getId(), APPLICANT_ID, null);
 
         BizException ex = assertThrows(BizException.class,
-                () -> reportService.withdrawReport(draft.getId(), null));
+                () -> reportService.withdrawReport(draft.getId(), APPLICANT_ID, null));
         assertEquals(ErrorCode.STATE_ILLEGAL, ex.getErrorCode());
+    }
+
+    @Test
+    void withdraw_by_other_user_is_forbidden() {
+        ReportDetailVO draft = createDraft();
+        reportService.submitReport(draft.getId(), "idem-withdraw-forbidden", null);
+
+        // 张三（2）不是申请人，撤回必须被拒（docs/02 §3 T2 守卫①）
+        BizException ex = assertThrows(BizException.class,
+                () -> reportService.withdrawReport(draft.getId(), 2L, null));
+        assertEquals(ErrorCode.FORBIDDEN, ex.getErrorCode());
+        // 失败不影响单据：仍是 PENDING
+        assertEquals("PENDING", reportMapper.selectById(draft.getId()).getStatus());
     }
 
     /** 建一张合法草稿：金额由服务端按明细合计写入，明细 1 条 3200.00 */

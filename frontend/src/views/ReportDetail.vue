@@ -33,6 +33,8 @@ const can = computed(() => {
 // aiAdvice.reasons 是 JSON 数组字符串（AiAdviceVO 注释：前端直接渲染），
 // 直接 v-for 字符串会逐字符遍历，必须在渲染前解析成数组
 const adviceReasons = computed(() => parseList(detail.value?.aiAdvice?.reasons))
+// 硬规则命中（金额不符/超预算等）也要展示——它比 AI 的语义建议更硬
+const adviceFindings = computed(() => parseList(detail.value?.aiAdvice?.hardFindings))
 
 function parseList(raw) {
   if (Array.isArray(raw)) return raw
@@ -205,8 +207,17 @@ onMounted(load)
           </span>
         </div>
         <ul style="margin: 0; padding-left: 18px; color: var(--c-text-2)">
-          <li v-for="(r, i) in adviceReasons" :key="i">{{ r }}</li>
+          <li v-for="(r, i) in adviceReasons" :key="i">{{ r.text || r }}</li>
+          <li v-if="!adviceReasons.length" style="color: var(--c-text-3)">模型未给出具体理由</li>
         </ul>
+        <div v-if="adviceFindings.length" style="margin-top: 10px">
+          <div v-for="(f, i) in adviceFindings" :key="i" class="alert alert-error" style="margin-bottom: 6px">
+            ⚠️ 硬规则命中：{{ f.message || f.code }}（{{ f.severity }}）
+          </div>
+        </div>
+        <div v-if="detail.aiAdvice.stale" class="alert alert-info" style="margin-top: 8px">
+          建议已过期（单据已改版），系统会在下次提交时重算
+        </div>
       </div>
       <div class="card card-pad" v-else-if="detail.status !== 'DRAFT'">
         <span style="color: var(--c-text-3)">暂无 AI 建议</span>

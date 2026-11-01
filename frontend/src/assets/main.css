@@ -206,6 +206,36 @@ a:hover { color: var(--c-primary-hover); }
   border-radius: 6px; font-size: 14px; font-family: inherit; background: var(--c-card);
   transition: border-color .15s, box-shadow .15s;
 }
+
+/* 低置信度字段高亮（docs/19 §1）：只是提示，不阻断填写 */
+.input-warn { border-color: #f59e0b !important; background: #fffbeb !important; }
+.input-warn:focus { box-shadow: 0 0 0 3px rgba(245, 158, 11, .18); }
+
+/* 发票图片预览（docs/19 §1.6）：缩略图 + 全屏大图 */
+.invoice-thumb {
+  width: 56px; height: 56px; object-fit: cover; border-radius: 6px;
+  border: 1px solid var(--c-border-strong); cursor: zoom-in; background: var(--c-card);
+}
+.invoice-thumb:hover { border-color: var(--c-primary); }
+.invoice-meta {
+  display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px;
+  font-size: 12px; color: var(--c-text-2);
+}
+.invoice-meta .warn { color: #b45309; font-weight: 600; }
+.invoice-preview-mask {
+  position: fixed; inset: 0; z-index: 1000; background: rgba(15, 23, 42, .72);
+  display: flex; align-items: center; justify-content: center; flex-direction: column;
+  gap: 10px; padding: 24px; cursor: zoom-out;
+}
+.invoice-preview-mask img {
+  max-width: 92vw; max-height: 86vh; border-radius: 8px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, .4); background: #fff;
+}
+.invoice-preview-hint { color: rgba(255, 255, 255, .75); font-size: 12px; }
+.invoice-preview-inline {
+  max-width: 240px; max-height: 200px; border-radius: 6px;
+  border: 1px solid var(--c-border-strong); cursor: zoom-in; background: #fff;
+}
 .input:focus, .select:focus, .textarea:focus {
   outline: none; border-color: var(--c-primary);
   box-shadow: 0 0 0 3px var(--c-primary-soft);

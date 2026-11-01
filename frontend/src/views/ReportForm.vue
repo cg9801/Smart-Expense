@@ -1,8 +1,8 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { createDraft, updateDraft, getDetail } from '../api/report.js'
-import { uploadInvoice } from '../api/invoice.js'
+import { uploadInvoice, fetchInvoice, fetchInvoiceBlobUrl } from '../api/invoice.js'
 import { useAuthStore } from '../stores/auth.js'
 import { EXPENSE_TYPES, ITEM_CATEGORIES } from '../constants/status.js'
 
@@ -25,7 +25,15 @@ const error = ref('')
 
 function newItem() {
   // invoiceId 在建单时随明细提交，服务端校验必须本人上传且未绑定（docs/11 §3.4）
-  return { expenseDate: '', category: '交通', amount: '', description: '', invoiceId: null, invoiceName: '', uploading: false }
+  // invoiceStatus/needsReview 是识别回填用的本地态，不进 DTO（docs/19 §1）
+  return {
+    expenseDate: '', category: '交通', amount: '', description: '',
+    invoiceId: null, invoiceName: '', uploading: false,
+    invoiceStatus: null, invoiceConfidence: null, needsReview: [],
+    invoiceRecognizer: null,
+    // 预览与识别摘要（docs/19 §1.6）：blob URL 由 fetchInvoiceBlobUrl 生成，卸载时释放
+    invoicePreviewUrl: null, recognizedNo: '', recognizedDate: ''
+  }
 }
 
 // 金额合计：明细相加，服务端会重新校验（ReportCreateDTO 注释：不信任前端总额）
@@ -58,15 +66,25 @@ async function loadForEdit() {
     form.title = d.title
     form.expenseType = d.expenseType
     form.remark = d.remark || ''
-    form.items = (d.items || []).map(it => ({
-      expenseDate: it.expenseDate || '',
-      category: it.category,
-      amount: it.amount,
-      description: it.description || '',
-      invoiceId: it.invoiceId || null,
-      invoiceName: it.invoiceId && invMap[it.invoiceId] ? invMap[it.invoiceId].originalName : '',
-      uploading: false
-    }))
+    form.items = (d.items || []).map(it => {
+      const inv = it.invoiceId ? invMap[it.invoiceId] : null
+      return {
+        expenseDate: it.expenseDate || '',
+        category: it.category,
+        amount: it.amount,
+        description: it.description || '',
+        invoiceId: it.invoiceId || null,
+        invoiceName: inv ? inv.originalName : '',
+        uploading: false,
+        invoiceStatus: inv?.ocrStatus || null,
+        invoiceConfidence: inv?.confidence ?? null,
+        invoiceRecognizer: inv?.recognizer || null,
+        needsReview: inv?.needsReview || [],
+        invoicePreviewUrl: null,
+        recognizedNo: '',
+        recognizedDate: ''
+      }
+    })
     if (!form.items.length) form.items.push(newItem())
   } catch (e) {
     error.value = e
@@ -82,16 +100,90 @@ async function onPickInvoice(i, ev) {
   if (!file) return
   const item = form.items[i]
   item.uploading = true
+  item.invoiceStatus = null
+  releasePreview(item)
   try {
     const inv = await uploadInvoice(file)
     item.invoiceId = inv.id
     item.invoiceName = inv.originalName
+    // 拿到 blob URL 才能显示图片：文件接口需要 Bearer，<img src> 带不了头（docs/19 §1.6）
+    try {
+      item.invoicePreviewUrl = await fetchInvoiceBlobUrl(inv.id)
+    } catch {
+      item.invoicePreviewUrl = null
+    }
+    pollInvoice(i, inv.id)
   } catch (e) {
     alert(`发票上传失败：${e.message}`)
   } finally {
     item.uploading = false
   }
 }
+
+/** 释放上一张图的 blob URL，避免重复上传时泄漏内存 */
+function releasePreview(item) {
+  if (item.invoicePreviewUrl) {
+    URL.revokeObjectURL(item.invoicePreviewUrl)
+    item.invoicePreviewUrl = null
+  }
+}
+
+onBeforeUnmount(() => {
+  form.items.forEach(releasePreview)
+})
+
+/**
+ * 轮询识别结果（docs/19 §1）：2s 一次、最多 15 次。
+ * 只预填表单，不自动保存——用户点「保存草稿」才写库（docs/11 §4 铁律）。
+ */
+async function pollInvoice(i, invoiceId) {
+  const item = form.items[i]
+  item.invoiceStatus = 'PROCESSING'
+  for (let n = 0; n < 15; n++) {
+    await new Promise(resolve => setTimeout(resolve, 2000))
+    let inv
+    try {
+      inv = await fetchInvoice(invoiceId)
+    } catch {
+      item.invoiceStatus = 'FAILED'
+      return
+    }
+    item.invoiceStatus = inv.ocrStatus
+    item.invoiceConfidence = inv.confidence ?? null
+    item.invoiceRecognizer = inv.recognizer || null
+    item.needsReview = inv.needsReview || []
+    if (inv.ocrStatus === 'SUCCESS') {
+      applyRecognizedFields(item, inv.fields || [])
+      return
+    }
+    if (inv.ocrStatus === 'MANUAL' || inv.ocrStatus === 'FAILED') {
+      return
+    }
+  }
+  item.invoiceStatus = 'TIMEOUT'
+}
+
+/** 字段映射（docs/19 §1.3）：只填空值，用户手填过的内容不覆盖 */
+function applyRecognizedFields(item, fields) {
+  const map = Object.fromEntries(fields.map(f => [f.name, f]))
+  item.recognizedNo = [map.invoiceCode?.value, map.invoiceNo?.value].filter(Boolean).join(' ')
+  item.recognizedDate = map.invoiceDate?.value || ''
+  if (map.amount && !item.amount) {
+    const amount = Number(map.amount.value)
+    if (amount > 0) item.amount = amount.toFixed(2)
+  }
+  if (map.invoiceDate && !item.expenseDate && map.invoiceDate.value) {
+    item.expenseDate = map.invoiceDate.value
+  }
+  if (!item.description) {
+    const code = map.invoiceCode?.value
+    const no = map.invoiceNo?.value
+    if (code || no) item.description = '发票号：' + [code, no].filter(Boolean).join(' ')
+  }
+}
+
+// 大图预览（点击缩略图打开，点遮罩关闭）
+const previewUrl = ref('')
 
 async function save() {
   error.value = ''
@@ -168,7 +260,8 @@ onMounted(() => { if (isEdit.value) loadForEdit() })
           <div class="form-row">
             <div class="form-item">
               <label class="form-label">费用日期<span class="req">*</span></label>
-              <input v-model="item.expenseDate" type="date" class="input" />
+              <input v-model="item.expenseDate" type="date" class="input"
+                     :class="{ 'input-warn': item.needsReview?.includes('invoiceDate') }" />
             </div>
             <div class="form-item" style="max-width: 160px">
               <label class="form-label">类别<span class="req">*</span></label>
@@ -178,13 +271,16 @@ onMounted(() => { if (isEdit.value) loadForEdit() })
             </div>
             <div class="form-item" style="max-width: 160px">
               <label class="form-label">金额（元）<span class="req">*</span></label>
-              <input v-model="item.amount" type="number" min="0.01" step="0.01" class="input" style="font-variant-numeric: tabular-nums" />
+              <input v-model="item.amount" type="number" min="0.01" step="0.01" class="input"
+                     :class="{ 'input-warn': item.needsReview?.includes('amount') }"
+                     style="font-variant-numeric: tabular-nums" />
             </div>
           </div>
           <div class="form-row" style="align-items: flex-end">
             <div class="form-item" style="margin-bottom: 0">
               <label class="form-label">说明</label>
-              <input v-model.trim="item.description" class="input" placeholder="选填" />
+              <input v-model.trim="item.description" class="input" placeholder="选填"
+                     :class="{ 'input-warn': item.needsReview?.includes('invoiceNo') || item.needsReview?.includes('invoiceCode') }" />
             </div>
             <div class="form-item" style="margin-bottom: 0; flex: 0 0 auto">
               <label class="form-label">发票</label>
@@ -198,10 +294,37 @@ onMounted(() => { if (isEdit.value) loadForEdit() })
                 <span v-if="item.invoiceName" style="font-size: 12px; color: var(--c-text-2); max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">
                   📎 {{ item.invoiceName }}
                 </span>
+                <img v-if="item.invoicePreviewUrl" :src="item.invoicePreviewUrl" class="invoice-thumb"
+                     alt="发票缩略图" title="点击查看大图" @click="previewUrl = item.invoicePreviewUrl" />
+                <span v-if="item.invoiceStatus === 'PROCESSING' || item.invoiceStatus === 'PENDING'"
+                      style="font-size: 12px; color: #b45309">识别中…</span>
+                <span v-else-if="item.invoiceStatus === 'SUCCESS'"
+                      style="font-size: 12px; color: var(--c-success)">
+                  已识别{{ item.invoiceConfidence != null ? `（置信度 ${Number(item.invoiceConfidence).toFixed(2)}）` : '' }}
+                  <span v-if="item.invoiceRecognizer === 'mock'" style="color: #b45309">· 演示数据，非真实识别</span>
+                </span>
+                <span v-else-if="item.invoiceStatus === 'MANUAL'"
+                      style="font-size: 12px; color: #b45309">待人工复核，可先手填</span>
+                <span v-else-if="item.invoiceStatus === 'FAILED'"
+                      style="font-size: 12px; color: var(--c-danger)">识别失败，可到发票复核页重试</span>
+                <span v-else-if="item.invoiceStatus === 'TIMEOUT'"
+                      style="font-size: 12px; color: var(--c-text-3)">识别较慢，稍后刷新</span>
               </div>
             </div>
             <button type="button" class="btn btn-outline btn-sm" style="margin-bottom: 4px"
                     :disabled="form.items.length <= 1" @click="removeItem(i)">删除</button>
+          </div>
+          <!-- 识别摘要：和图片对照用（docs/19 §1.6），低置信度字段标黄 -->
+          <div v-if="item.invoiceStatus === 'SUCCESS'" class="invoice-meta">
+            <span>识别结果：</span>
+            <span :class="{ warn: item.needsReview?.includes('amount') }">金额 {{ item.amount || '—' }}</span>
+            <span :class="{ warn: item.needsReview?.includes('invoiceDate') }">
+              日期 {{ item.recognizedDate || item.expenseDate || '—' }}
+            </span>
+            <span :class="{ warn: item.needsReview?.includes('invoiceNo') || item.needsReview?.includes('invoiceCode') }">
+              号码 {{ item.recognizedNo || '—' }}
+            </span>
+            <span v-if="item.needsReview?.length" class="warn">黄色字段置信度较低，请对照图片核对</span>
           </div>
         </div>
 
@@ -218,6 +341,12 @@ onMounted(() => { if (isEdit.value) loadForEdit() })
           </button>
         </div>
       </form>
+    </div>
+
+    <!-- 发票大图预览：点击遮罩关闭（docs/19 §1.6） -->
+    <div v-if="previewUrl" class="invoice-preview-mask" @click="previewUrl = ''">
+      <img :src="previewUrl" alt="发票大图" />
+      <span class="invoice-preview-hint">点击空白处关闭</span>
     </div>
   </div>
 </template>
