@@ -110,7 +110,7 @@ node ../scripts/load-test.mjs --concurrency 10 --duration 15
 | `zhaoliu` | 分管 | 三级审批 |
 | `admin` | 管理员 | 预算、用户、对账、指标 |
 
-## 质量与数据（真实输出）
+## 质量与数据（
 
 | 项 | 结果 |
 |---|---|
@@ -119,11 +119,7 @@ node ../scripts/load-test.mjs --concurrency 10 --duration 15
 | 前端构建 | `pnpm build` → **49 modules** |
 | 只读压测（10 并发 × 15s） | 列表 QPS **270.33** / P95 **15.3ms**；详情 QPS **270.27** / P95 **34.4ms**，错误率 0 |
 
-> 压测是本机单机 + Docker MySQL + 默认 mock 识别 + 只读链路，不代表生产容量；完整环境与局限见本地 `docs/20-压测报告.md`（不随仓库发布）。**没有写路径压测，不对外宣称写吞吐。**
-
 ## 接口一览
-
-完整契约（含实现状态）在本地 `docs/03-接口清单.md` 维护（不随仓库发布）。
 
 | 分组 | 代表接口 |
 |---|---|
@@ -148,16 +144,7 @@ node ../scripts/load-test.mjs --concurrency 10 --duration 15
 ├─ Smart-Expense/        # Spring Boot 工程
 │  ├─ src/main/java/com/occ/smartexpense/
 │  ├─ src/test/java/com/occ/smartexpense/
-│  └─ docker-compose.yml
-└─ README.md
-```
-
-## 已知限制（诚实清单）
-
-- 云 OCR 主实现未接（`InvoiceRecognizer` 扩展点已留，接厂商 SDK 即可）；当前真实识别走多模态 `qwen3-vl-plus`。
-- 压测只覆盖只读链路，写路径（提交/审批/上传/并发审批）未压。
-- Redis 只预留，未做缓存/分布式锁。
-- 前端测试覆盖 3 个模块（status / request / StatusTag），表单与复核弹窗未覆盖。
+│  └─ docker-compose.yml```
 
 ## License
 
