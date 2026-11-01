@@ -145,7 +145,16 @@ class InvoiceRecognitionTest {
         return count == null ? 0 : count;
     }
 
+    private static final byte[] PNG_HEADER = {
+            (byte) 0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'
+    };
+
+    /** 上传要过文件头魔数校验，测试数据也必须是真 PNG 头 + 内容 */
     private MockMultipartFile file(String name, String content) {
-        return new MockMultipartFile("file", name, "image/png", content.getBytes());
+        byte[] payload = content.getBytes();
+        byte[] body = new byte[PNG_HEADER.length + payload.length];
+        System.arraycopy(PNG_HEADER, 0, body, 0, PNG_HEADER.length);
+        System.arraycopy(payload, 0, body, PNG_HEADER.length, payload.length);
+        return new MockMultipartFile("file", name, "image/png", body);
     }
 }

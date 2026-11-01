@@ -48,7 +48,7 @@ class AiReviewRefreshTest {
     @Test
     void refresh_recomputes_same_version_and_keeps_single_row() {
         ReportDetailVO draft = createDraft();
-        reportService.submitReport(draft.getId(), "idem-ai-refresh", null);
+        reportService.submitReport(draft.getId(), APPLICANT_ID, "idem-ai-refresh", null);
         ExpenseReport report = reportMapper.selectById(draft.getId());
 
         // 第一次重算：无记录 → runAgent 落一条
@@ -84,12 +84,10 @@ class AiReviewRefreshTest {
         item.setDescription("北京-上海 高铁往返");
 
         ReportCreateDTO dto = new ReportCreateDTO();
-        dto.setApplicantId(APPLICANT_ID);
-        dto.setApplicantDeptId(APPLICANT_DEPT_ID);
         dto.setTitle("AI 重算测试");
         dto.setExpenseType("TRAVEL");
         dto.setRemark("AiReviewRefreshTest");
         dto.setItems(List.of(item));
-        return reportService.createDraft(dto);
+        return reportService.createDraft(dto, APPLICANT_ID, APPLICANT_DEPT_ID);
     }
 }

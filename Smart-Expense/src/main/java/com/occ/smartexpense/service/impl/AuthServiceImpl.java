@@ -8,6 +8,7 @@ import com.occ.smartexpense.entity.SysUser;
 import com.occ.smartexpense.mapper.SysUserMapper;
 import com.occ.smartexpense.security.CurrentUser;
 import com.occ.smartexpense.security.JwtUtil;
+import com.occ.smartexpense.security.LoginAttemptLimiter;
 import com.occ.smartexpense.security.UserContext;
 import com.occ.smartexpense.service.AuthService;
 import com.occ.smartexpense.vo.LoginVO;
@@ -34,20 +35,26 @@ public class AuthServiceImpl implements AuthService {
     private final SysUserMapper sysUserMapper;
     private final JwtUtil jwtUtil;
     private final BCryptPasswordEncoder passwordEncoder;
+    private final LoginAttemptLimiter loginAttemptLimiter;
 
     @Override
-    public LoginVO login(LoginDTO dto) {
+    public LoginVO login(LoginDTO dto, String clientIp) {
+        // 先限流再查库：超限请求不消耗数据库连接，也不给撞库留时间窗口（docs/12 §9）
+        loginAttemptLimiter.check(dto.getUsername(), clientIp);
         SysUser user = sysUserMapper.selectOne(new LambdaQueryWrapper<SysUser>()
                 .eq(SysUser::getUsername, dto.getUsername()));
         // 用户不存在与密码错误用同一句话，防止枚举用户名
         if (user == null || user.getPasswordHash() == null
                 || !passwordEncoder.matches(dto.getPassword(), user.getPasswordHash())) {
+            loginAttemptLimiter.onFailure(dto.getUsername(), clientIp);
             throw new BizException(ErrorCode.UNAUTHORIZED, "用户名或密码错误");
         }
         if (user.getStatus() == null || user.getStatus() != ACTIVE) {
+            loginAttemptLimiter.onFailure(dto.getUsername(), clientIp);
             throw new BizException(ErrorCode.UNAUTHORIZED, "账号不可用");
         }
 
+        loginAttemptLimiter.onSuccess(dto.getUsername(), clientIp);
         List<String> roles = rolesOf(user.getId());
         String token = jwtUtil.issue(user.getId(), user.getUsername(), roles);
 

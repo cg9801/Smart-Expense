@@ -30,7 +30,7 @@
 
 | 模块 | 能力 |
 |---|---|
-| 审批流 | 提交 / 撤回 / 编辑 / 删除草稿、三级审批、会签与或签、转交（防环）、已办 |
+| 审批流 | 提交 / 撤回 / 编辑 / 删除草稿、三级审批、转交（防环）、已办 |
 | 预算 | 提交冻结、驳回/撤回释放、末级通过实扣、部门预算分发与追加流水、公司总预算池 |
 | 可靠消息 | Outbox、RabbitMQ、消费幂等、死信、付款单自动生成 |
 | 对账 | 缺扣 / 缺付款单 / 金额不一致 / 状态卡死四类差异 + 自动补偿 |
@@ -131,7 +131,7 @@ node ../scripts/load-test.mjs --concurrency 10 --duration 15
 | 付款/对账/指标 | `GET /payments`、`confirm`、`admin/reconcile/*`、`admin/metrics` |
 | 管理 | `admin/users`、`admin/users/page`、`admin/ai-review/refresh` |
 
-认证：`Authorization: Bearer <JWT>`；兼容期可用 `X-User-Id`（仅本地调试）。
+认证：`Authorization: Bearer <JWT>`；`X-User-Id` 仅在 `AUTH_COMPAT=true` + `AUTH_MODE=header` 时生效（本地调试，默认关闭）。
 
 ## 目录
 
@@ -144,7 +144,9 @@ node ../scripts/load-test.mjs --concurrency 10 --duration 15
 ├─ Smart-Expense/        # Spring Boot 工程
 │  ├─ src/main/java/com/occ/smartexpense/
 │  ├─ src/test/java/com/occ/smartexpense/
-│  └─ docker-compose.yml```
+│  └─ docker-compose.yml
+└─ README.md
+```
 
 ## License
 

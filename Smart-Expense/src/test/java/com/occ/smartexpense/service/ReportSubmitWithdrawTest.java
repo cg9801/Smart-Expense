@@ -61,7 +61,7 @@ class ReportSubmitWithdrawTest {
         assertEquals("DRAFT", draft.getStatus());
         assertEquals(List.of("SUBMIT"), draft.getAvailableActions());
 
-        ReportDetailVO submitted = reportService.submitReport(draft.getId(), "idem-submit-1", "trace-submit-1");
+        ReportDetailVO submitted = reportService.submitReport(draft.getId(), APPLICANT_ID, "idem-submit-1", "trace-submit-1");
 
         assertEquals("PENDING", submitted.getStatus());
         assertEquals(1, submitted.getCurrentStep());
@@ -113,8 +113,8 @@ class ReportSubmitWithdrawTest {
         ReportDetailVO draft = createDraft();
         String key = "idem-submit-duplicate";
 
-        ReportDetailVO first = reportService.submitReport(draft.getId(), key, "trace-first");
-        ReportDetailVO second = reportService.submitReport(draft.getId(), key, "trace-second");
+        ReportDetailVO first = reportService.submitReport(draft.getId(), APPLICANT_ID, key, "trace-first");
+        ReportDetailVO second = reportService.submitReport(draft.getId(), APPLICANT_ID, key, "trace-second");
 
         assertEquals("PENDING", second.getStatus());
         assertEquals(first.getId(), second.getId());
@@ -127,7 +127,7 @@ class ReportSubmitWithdrawTest {
     @Test
     void withdraw_returns_draft_and_cancels_all_pending_approvals() {
         ReportDetailVO draft = createDraft();
-        reportService.submitReport(draft.getId(), "idem-withdraw", "trace-submit");
+        reportService.submitReport(draft.getId(), APPLICANT_ID, "idem-withdraw", "trace-submit");
 
         ReportDetailVO withdrawn = reportService.withdrawReport(draft.getId(), APPLICANT_ID, "trace-withdraw");
 
@@ -157,7 +157,7 @@ class ReportSubmitWithdrawTest {
     @Test
     void withdraw_again_after_withdraw_is_state_illegal() {
         ReportDetailVO draft = createDraft();
-        reportService.submitReport(draft.getId(), "idem-withdraw-twice", null);
+        reportService.submitReport(draft.getId(), APPLICANT_ID, "idem-withdraw-twice", null);
         reportService.withdrawReport(draft.getId(), APPLICANT_ID, null);
 
         BizException ex = assertThrows(BizException.class,
@@ -168,7 +168,7 @@ class ReportSubmitWithdrawTest {
     @Test
     void withdraw_by_other_user_is_forbidden() {
         ReportDetailVO draft = createDraft();
-        reportService.submitReport(draft.getId(), "idem-withdraw-forbidden", null);
+        reportService.submitReport(draft.getId(), APPLICANT_ID, "idem-withdraw-forbidden", null);
 
         // 张三（2）不是申请人，撤回必须被拒（docs/02 §3 T2 守卫①）
         BizException ex = assertThrows(BizException.class,
@@ -187,13 +187,11 @@ class ReportSubmitWithdrawTest {
         item.setDescription("北京-上海 高铁往返");
 
         ReportCreateDTO dto = new ReportCreateDTO();
-        dto.setApplicantId(APPLICANT_ID);
-        dto.setApplicantDeptId(APPLICANT_DEPT_ID);
         dto.setTitle("10 月差旅报销");
         dto.setExpenseType("TRAVEL");
         dto.setRemark("集成测试草稿");
         dto.setItems(List.of(item));
-        return reportService.createDraft(dto);
+        return reportService.createDraft(dto, APPLICANT_ID, APPLICANT_DEPT_ID);
     }
 
     private List<ExpenseApproval> listApprovals(Long reportId) {

@@ -23,11 +23,12 @@ import java.util.Set;
  *
  * <p>解析顺序：
  * <ol>
- *   <li>有 {@code Authorization: Bearer <token>} → 解析 JWT 写入上下文；</li>
- *   <li>没有 token 且 {@code auth.mode=header} → 用 X-User-Id 查库回填（兼容期）；</li>
+ *   <li>有 {@code Authorization: Bearer <token>} → 解析 JWT，并按 userId 查库补全姓名/部门、校验账号状态；</li>
+ *   <li>没有 token 且 {@code auth.compat=true 且 auth.mode=header} → 用 X-User-Id 查库回填（本地兼容期）；</li>
  *   <li>都没有 → 放行，由业务层的 {@link UserContext#requireUserId()} 抛 40101。</li>
  * </ol>
- * 请求结束一定 {@link UserContext#clear()}。
+ * 上下文清理在 {@link UserContextFilter} 的 finally 里，不放在本拦截器：
+ * preHandle 自己抛异常时 afterCompletion 不会被回调，清理会漏（docs/12 §6）。
  */
 @Slf4j
 @Component
@@ -39,8 +40,11 @@ public class JwtInterceptor implements HandlerInterceptor {
     private final JwtUtil jwtUtil;
     private final SysUserMapper sysUserMapper;
 
-    @Value("${auth.mode:header}")
+    @Value("${auth.mode:jwt}")
     private String mode;
+
+    @Value("${auth.compat:false}")
+    private boolean compat;
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
@@ -50,8 +54,9 @@ public class JwtInterceptor implements HandlerInterceptor {
 
         String authorization = request.getHeader("Authorization");
         if (authorization != null && authorization.startsWith(BEARER)) {
-            UserContext.set(jwtUtil.parse(authorization.substring(BEARER.length())));
-        } else if ("header".equalsIgnoreCase(mode)) {
+            // JWT 只声明 userId/username/roles；姓名、部门与账号状态以库为准（docs/12 §3）
+            UserContext.set(enrich(jwtUtil.parse(authorization.substring(BEARER.length()))));
+        } else if (compat && "header".equalsIgnoreCase(mode)) {
             fillFromHeader(request);
         }
 
@@ -70,13 +75,26 @@ public class JwtInterceptor implements HandlerInterceptor {
         return true;
     }
 
-    @Override
-    public void afterCompletion(HttpServletRequest request, HttpServletResponse response,
-                                Object handler, Exception ex) {
-        UserContext.clear();   // 必须，防止线程复用串号
+    /**
+     * 这里**故意不实现** afterCompletion 清理：拦截器自己的 preHandle 抛异常时它不会被回调，
+     * 清理统一由 {@link UserContextFilter} 的 finally 负责（docs/12 §6）。
+     */
+
+    /**
+     * 身份真值以数据库为准：JWT 只携带 userId/username/roles（docs/12 §3），
+     * 这里用一次主键查询补全 realName/deptId（详情鉴权需要部门），顺带拦掉"已禁用但 token 未过期"。
+     */
+    private CurrentUser enrich(CurrentUser parsed) {
+        SysUser user = sysUserMapper.selectById(parsed.userId());
+        if (user == null || user.getStatus() == null || user.getStatus() != 1) {
+            throw new BizException(ErrorCode.UNAUTHORIZED, "账号不可用，请重新登录");
+        }
+        // 角色也以库为准：撤回权限后旧 token 不应继续有角色
+        return new CurrentUser(user.getId(), user.getUsername(), user.getRealName(),
+                user.getDeptId(), roleSet(parsed.userId()));
     }
 
-    /** 兼容期：X-User-Id 回填上下文（含角色），便于现有 curl 与测试平滑迁移 */
+    /** 兼容期：X-User-Id 回填上下文（含角色），仅在 auth.compat=true 时可达 */
     private void fillFromHeader(HttpServletRequest request) {
         String raw = request.getHeader("X-User-Id");
         if (raw == null || raw.isBlank()) {

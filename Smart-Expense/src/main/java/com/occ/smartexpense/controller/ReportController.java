@@ -37,14 +37,16 @@ public class ReportController {
 
     @PostMapping
     public Result<ReportDetailVO> createDraft(@Valid @RequestBody ReportCreateDTO dto) {
-        return Result.ok(reportService.createDraft(dto));
+        // 申请人身份只从登录上下文取，请求体里的同名字段一律无效（docs/12 §6）
+        CurrentUser current = UserContext.requireUser();
+        return Result.ok(reportService.createDraft(dto, current.userId(), current.deptId()));
     }
 
     @GetMapping("/{id}")
     public Result<ReportDetailVO> getDetail(@PathVariable Long id) {
-        // 详情含金额、明细与审批链，必须登录后才能看（docs/12 §7）
-        UserContext.requireUserId();
-        return Result.ok(reportService.getDetail(id));
+        // 详情含金额、明细与审批链：先登录，再按「本人/审批人/财务/同部门主管」鉴权（docs/03 §2.2）
+        CurrentUser current = UserContext.requireUser();
+        return Result.ok(reportService.getDetailFor(id, current.userId(), current.deptId(), current.roles()));
     }
 
     /**
@@ -93,7 +95,9 @@ public class ReportController {
             @PathVariable Long id,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             @RequestHeader(value = "X-Trace-Id", required = false) String traceId) {
-        return Result.ok(reportService.submitReport(id, idempotencyKey, traceId));
+        // 提交会冻结预算、生成审批链：归属校验在 Service 内做，操作人只从上下文取（docs/03 §2.2）
+        Long operatorId = UserContext.requireUserId();
+        return Result.ok(reportService.submitReport(id, operatorId, idempotencyKey, traceId));
     }
 
     /** 撤回报销单：仅申请人本人、PENDING 且无人审批时允许，见 docs/02-状态机.md T2。 */

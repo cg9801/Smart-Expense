@@ -94,7 +94,7 @@ class ReportDeleteTest {
     @Test
     void delete_submitted_report_is_state_illegal() {
         ReportDetailVO draft = createDraft();
-        reportService.submitReport(draft.getId(), "idem-delete-submitted", null);
+        reportService.submitReport(draft.getId(), APPLICANT_ID, "idem-delete-submitted", null);
 
         BizException ex = assertThrows(BizException.class,
                 () -> reportService.deleteDraft(draft.getId(), APPLICANT_ID));
@@ -130,12 +130,10 @@ class ReportDeleteTest {
         item.setDescription("北京-上海 高铁往返");
 
         ReportCreateDTO dto = new ReportCreateDTO();
-        dto.setApplicantId(APPLICANT_ID);
-        dto.setApplicantDeptId(APPLICANT_DEPT_ID);
         dto.setTitle("删除草稿测试");
         dto.setExpenseType("TRAVEL");
         dto.setRemark("ReportDeleteTest");
         dto.setItems(List.of(item));
-        return reportService.createDraft(dto);
+        return reportService.createDraft(dto, APPLICANT_ID, APPLICANT_DEPT_ID);
     }
 }

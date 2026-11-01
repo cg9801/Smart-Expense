@@ -20,6 +20,8 @@ public enum ErrorCode {
     BUDGET_NOT_ENOUGH(40902, HttpStatus.CONFLICT, "预算不足"),
     /** 幂等键已用于不同内容，见 docs/03-接口清单.md §5 */
     IDEMPOTENCY_CONFLICT(40903, HttpStatus.CONFLICT, "幂等键已用于不同内容"),
+    /** 登录等敏感接口的限流（单机内存实现，docs/12 §9） */
+    TOO_MANY_REQUESTS(42901, HttpStatus.TOO_MANY_REQUESTS, "请求过于频繁，请稍后再试"),
     SYSTEM_ERROR(50001, HttpStatus.INTERNAL_SERVER_ERROR, "系统异常");
 
     private final int code;

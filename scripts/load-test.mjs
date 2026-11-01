@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 /**
- * 只读链路压测（JMeter 的轻量替代）：登录 → 列表 → 详情，统计 QPS / P95。
+ * 只读链路压测：登录 → 列表 → 详情，统计 QPS / P95（docs/20）。
  * 用法：node scripts/load-test.mjs --base http://127.0.0.1:8080 --concurrency 10 --duration 15
  *
- * 只压只读接口，不污染业务数据；识别链路走默认 mock（不出网、不花钱）。
+ * 口径说明（2026-11 修正）：
+ * - 并发按**每个接口**均分：10 并发 + 2 个接口 = 每接口 5 并发，输出里写的是 effectiveConcurrency；
+ * - QPS 是**单接口**吞吐；两接口合计吞吐看 totalQps；
+ * - 只压只读接口，不污染业务数据；识别链路走默认 mock（不出网、不花钱）。
  */
 const args = Object.fromEntries(
   process.argv.slice(2).map((a, i, arr) => (a.startsWith('--') ? [a.slice(2), arr[i + 1]] : null)).filter(Boolean)
@@ -45,13 +48,14 @@ async function main() {
     { name: 'GET /reports/{id}（详情）', url: `${base}/api/v1/reports/${reportId}` }
   ]
 
+  // 并发均分到每个接口：目标 5 + 5，而不是 10 个 worker 抢两个接口（旧口径会让人误读成"每接口 10 并发"）
+  const perTarget = Math.max(1, Math.floor(concurrency / targets.length))
+  const effectiveConcurrency = perTarget
   const results = []
   const endAt = Date.now() + durationSec * 1000
-  let seq = 0
 
-  async function worker() {
+  async function worker(target) {
     while (Date.now() < endAt) {
-      const target = targets[seq++ % targets.length]
       const start = performance.now()
       let ok = false
       let status = 0
@@ -67,7 +71,7 @@ async function main() {
     }
   }
 
-  await Promise.all(Array.from({ length: concurrency }, worker))
+  await Promise.all(targets.flatMap(t => Array.from({ length: perTarget }, () => worker(t))))
 
   const summary = {}
   for (const r of results) {
@@ -78,21 +82,26 @@ async function main() {
     s.latencies.push(r.ms)
   }
 
+  const totalRequests = results.length
   const output = {
     base,
     concurrency,
+    effectiveConcurrency,
     durationSec,
     generatedAt: new Date().toISOString(),
+    totalRequests,
+    totalQps: Number((totalRequests / durationSec).toFixed(2)),
     scenarios: {}
   }
 
-  console.log(`\n压测结果：并发 ${concurrency}，持续 ${durationSec}s，目标 ${base}\n`)
+  console.log(`\n压测结果：总并发 ${concurrency}（每接口 ${effectiveConcurrency}），持续 ${durationSec}s，目标 ${base}\n`)
   console.log('场景'.padEnd(30) + '请求数'.padStart(8) + '成功'.padStart(8) + 'QPS'.padStart(10) +
     'P50(ms)'.padStart(10) + 'P95(ms)'.padStart(10) + 'P99(ms)'.padStart(10))
   for (const [name, s] of Object.entries(summary)) {
     const sorted = s.latencies.sort((a, b) => a - b)
     const qps = s.total / durationSec
     output.scenarios[name] = {
+      effectiveConcurrency,
       total: s.total,
       ok: s.ok,
       errorRate: Number(((s.total - s.ok) / s.total).toFixed(4)),
@@ -107,6 +116,7 @@ async function main() {
       percentile(sorted, 95).toFixed(1).padStart(10) + percentile(sorted, 99).toFixed(1).padStart(10))
   }
 
+  console.log(`\n合计：${totalRequests} 请求 / ${durationSec}s = ${output.totalQps} QPS（单接口数字不能当总吞吐报）`)
   console.log('\nJSON:')
   console.log(JSON.stringify(output, null, 2))
 }

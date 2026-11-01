@@ -76,9 +76,10 @@ approval:
     # 同一节点提醒间隔（小时），避免每轮扫描都写一条审计
     remind-interval-hours: ${SLA_REMIND_HOURS:1}
 
-# 认证（docs/12）：mode=header 为兼容期，联调完成切 jwt
+# 认证（docs/12）：默认 jwt；header 兼容模式必须显式 AUTH_COMPAT=true 才启用（docs/12 §7）
 auth:
-  mode: ${AUTH_MODE:header}
+  mode: ${AUTH_MODE:jwt}
+  compat: ${AUTH_COMPAT:false}
   # 生产必须通过环境变量替换，长度 >= 32 字节
   jwt-secret: ${JWT_SECRET:smart-expense-dev-secret-key-please-change-32}
   token-ttl-minutes: ${JWT_TTL_MINUTES:120}
@@ -94,3 +95,8 @@ mybatis-plus:
       logic-delete-value: 1
       logic-not-delete-value: 0
   mapper-locations: classpath*:mapper/**/*.xml
+
+# 日志带 traceId（docs/10）：由 UserContextFilter 写入 MDC，业务审计字段另有 traceId
+logging:
+  pattern:
+    console: "%d{HH:mm:ss.SSS} %-5level [%X{traceId:-}] %logger{36} - %msg%n"

@@ -62,7 +62,7 @@ class ApprovalFeatureTest {
     @Test
     void handled_lists_my_approved_node_after_approve() {
         ReportDetailVO draft = createDraft();
-        reportService.submitReport(draft.getId(), "idem-handled", null);
+        reportService.submitReport(draft.getId(), APPLICANT_ID, "idem-handled", null);
         Long nodeId = currentNode(draft.getId()).getId();
 
         approvalService.approve(nodeId, SUPERVISOR_ID, "同意", null, null);
@@ -83,7 +83,7 @@ class ApprovalFeatureTest {
     @Test
     void transfer_candidates_exclude_self_and_historical_approvers() {
         ReportDetailVO draft = createDraft();
-        reportService.submitReport(draft.getId(), "idem-candidates", null);
+        reportService.submitReport(draft.getId(), APPLICANT_ID, "idem-candidates", null);
 
         // 张三（当前审批人）看到的候选人：不能是自己，也不能是本单历史审批人（张三2/王五4/赵六5）
         List<Long> ids = approvalService.listTransferCandidates(SUPERVISOR_ID, draft.getId())
@@ -98,7 +98,7 @@ class ApprovalFeatureTest {
     @Test
     void sla_scan_writes_remind_log_only_once_per_window() {
         ReportDetailVO draft = createDraft();
-        reportService.submitReport(draft.getId(), "idem-sla-remind", null);
+        reportService.submitReport(draft.getId(), APPLICANT_ID, "idem-sla-remind", null);
         ExpenseApproval node = currentNode(draft.getId());
         // 刚过期 1 小时：还没到"超时 1 个 SLA"，只提醒
         approvalMapper.update(null, new LambdaUpdateWrapper<ExpenseApproval>()
@@ -126,7 +126,7 @@ class ApprovalFeatureTest {
     @Test
     void sla_scan_escalates_to_department_leader_after_one_extra_sla() {
         ReportDetailVO draft = createDraft();
-        reportService.submitReport(draft.getId(), "idem-sla-escalate", null);
+        reportService.submitReport(draft.getId(), APPLICANT_ID, "idem-sla-escalate", null);
         ExpenseApproval node = currentNode(draft.getId());
         // 超时超过 1 个 SLA（24h）：deadline = now - 25h → 升级
         approvalMapper.update(null, new LambdaUpdateWrapper<ExpenseApproval>()
@@ -173,12 +173,10 @@ class ApprovalFeatureTest {
         item.setDescription("北京-上海 高铁往返");
 
         ReportCreateDTO dto = new ReportCreateDTO();
-        dto.setApplicantId(APPLICANT_ID);
-        dto.setApplicantDeptId(APPLICANT_DEPT_ID);
         dto.setTitle("审批能力测试");
         dto.setExpenseType("TRAVEL");
         dto.setRemark("ApprovalFeatureTest");
         dto.setItems(List.of(item));
-        return reportService.createDraft(dto);
+        return reportService.createDraft(dto, APPLICANT_ID, APPLICANT_DEPT_ID);
     }
 }

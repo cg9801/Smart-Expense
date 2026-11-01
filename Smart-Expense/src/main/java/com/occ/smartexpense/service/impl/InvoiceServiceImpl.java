@@ -64,8 +64,7 @@ public class InvoiceServiceImpl implements InvoiceService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public InvoiceVO upload(MultipartFile file, Long uploaderId) {
-        if (file == null || file.isEmpty()) {
+    public InvoiceVO upload(MultipartFile file, Long uploaderId) {        if (file == null || file.isEmpty()) {
             throw new BizException(ErrorCode.PARAM_ERROR, "发票文件不能为空");
         }
         String originalName = file.getOriginalFilename() == null ? "invoice" : file.getOriginalFilename();
@@ -73,6 +72,8 @@ public class InvoiceServiceImpl implements InvoiceService {
         if (!ALLOWED_EXT.contains(ext)) {
             throw new BizException(ErrorCode.PARAM_ERROR, "只支持图片或 PDF 文件");
         }
+        // 扩展名可以随便改，再验一次文件头魔数（docs/11 §3.4）
+        verifyMagic(file, ext);
 
         String hash = sha256(file);
         // 情形 1：同一个人重复上传同一张图 → 直接返回已有记录，不重复落库（docs/11 §3.4）
@@ -124,6 +125,36 @@ public class InvoiceServiceImpl implements InvoiceService {
         // 与上传同事务写 Outbox：消息一定投出去，识别在消费者里做（docs/11 §3.1）
         recognitionService.enqueue(invoice.getId());
         return toVO(invoice);
+    }
+
+    /**
+     * 校验文件头魔数（docs/11 §3.4）：扩展名与 Content-Type 都是客户端可伪造的，
+     * 只有文件头能证明"这是不是一张图/PDF"，避免把 .html 或可执行文件塞进存储目录。
+     */
+    private void verifyMagic(MultipartFile file, String ext) {
+        byte[] head;
+        try (InputStream in = file.getInputStream()) {
+            head = in.readNBytes(12);
+        } catch (IOException e) {
+            throw new BizException(ErrorCode.PARAM_ERROR, "发票文件读取失败，请重新上传");
+        }
+        boolean ok = switch (ext) {
+            case "png" -> head.length >= 8 && (head[0] & 0xFF) == 0x89
+                    && head[1] == 'P' && head[2] == 'N' && head[3] == 'G';
+            case "jpg", "jpeg" -> head.length >= 3 && (head[0] & 0xFF) == 0xFF
+                    && (head[1] & 0xFF) == 0xD8 && (head[2] & 0xFF) == 0xFF;
+            case "gif" -> head.length >= 3 && head[0] == 'G' && head[1] == 'I' && head[2] == 'F';
+            case "bmp" -> head.length >= 2 && head[0] == 'B' && head[1] == 'M';
+            case "webp" -> head.length >= 12
+                    && head[0] == 'R' && head[1] == 'I' && head[2] == 'F' && head[3] == 'F'
+                    && head[8] == 'W' && head[9] == 'E' && head[10] == 'B' && head[11] == 'P';
+            case "pdf" -> head.length >= 4
+                    && head[0] == '%' && head[1] == 'P' && head[2] == 'D' && head[3] == 'F';
+            default -> false;
+        };
+        if (!ok) {
+            throw new BizException(ErrorCode.PARAM_ERROR, "文件内容与扩展名不符，请上传真实的图片或 PDF");
+        }
     }
 
     @Override

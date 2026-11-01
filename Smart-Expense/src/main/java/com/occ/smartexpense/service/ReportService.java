@@ -14,11 +14,20 @@ import java.util.Set;
  */
 public interface ReportService {
 
-    /** 创建草稿，返回详情；对应 docs/02-状态机.md 的初始态 DRAFT。 */
-    ReportDetailVO createDraft(ReportCreateDTO dto);
+    /**
+     * 创建草稿，返回详情；对应 docs/02-状态机.md 的初始态 DRAFT。
+     * 申请人 id 与部门由服务端从登录上下文传入，不读请求体（docs/12 §6、docs/03 §2.2）。
+     */
+    ReportDetailVO createDraft(ReportCreateDTO dto, Long userId, Long deptId);
 
-    /** 查询详情，不存在抛 BizException(NOT_FOUND)。 */
+    /** 内部组装用：不鉴权，仅限已完成鉴权的调用方使用（建单/提交/撤回/改草稿的返回）。 */
     ReportDetailVO getDetail(Long id);
+
+    /**
+     * 对外详情入口（GET /reports/{id}，docs/03 §2.2）：按「本人 / 该单审批人 / 财务管理员 / 同部门主管」鉴权。
+     * 与列表 scope 的权限模型保持一致，避免"列表能看、点进去 403"。
+     */
+    ReportDetailVO getDetailFor(Long id, Long userId, Long deptId, Set<String> roles);
 
     /**
      * 分页列表（docs/03 §2.2 GET /reports）。
@@ -28,14 +37,16 @@ public interface ReportService {
                                      String scope, String status, String keyword, int page, int size);
 
     /**
-     * 提交报销单（T1 DRAFT → PENDING）。
+     * 提交报销单（T1 DRAFT → PENDING）。**仅申请人本人可提交**，归属校验在幂等回放之前，
+     * 否则他人可用别单的 Idempotency-Key 触发回放拿到详情（docs/03 §2.2）。
      * 同一 Idempotency-Key 重复提交直接回放详情，不重复生成审批链。
      *
      * @param id             报销单 id
+     * @param operatorId     当前登录用户 id，必须等于申请人
      * @param idempotencyKey 请求头 Idempotency-Key，落库到 submit_token
      * @param traceId        请求头 X-Trace-Id，为空时服务端生成
      */
-    ReportDetailVO submitReport(Long id, String idempotencyKey, String traceId);
+    ReportDetailVO submitReport(Long id, Long operatorId, String idempotencyKey, String traceId);
 
     /**
      * 撤回报销单（T2 PENDING → DRAFT），仅当操作人为申请人且没有任何审批动作时允许。

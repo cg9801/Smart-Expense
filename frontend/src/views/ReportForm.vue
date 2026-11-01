@@ -192,10 +192,8 @@ async function save() {
 
   saving.value = true
   try {
-    // applicantId / applicantDeptId 从登录态取，不留给用户填（ReportCreateDTO 契约）
+    // 申请人身份由后端从 JWT 取，请求体不再携带（docs/03 §2.2）
     const dto = {
-      applicantId: auth.user.id,
-      applicantDeptId: auth.user.deptId,
       title: form.title.trim(),
       expenseType: form.expenseType,
       remark: form.remark.trim(),

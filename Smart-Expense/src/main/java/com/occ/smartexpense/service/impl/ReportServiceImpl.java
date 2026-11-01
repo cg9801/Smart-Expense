@@ -103,16 +103,20 @@ public class ReportServiceImpl implements ReportService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public ReportDetailVO createDraft(ReportCreateDTO dto) {
+    public ReportDetailVO createDraft(ReportCreateDTO dto, Long userId, Long deptId) {
         // 金额以明细合计为准，不信任前端传来的总额（docs/02 §3 T1 守卫①）
         BigDecimal total = dto.getItems().stream()
                 .map(ReportItemDTO::getAmount)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
+        // 申请人身份只从登录上下文来（docs/12 §6）；deptId 由 JwtInterceptor 查库回填，为空说明身份不完整，直接拒绝
+        if (userId == null || deptId == null) {
+            throw new BizException(ErrorCode.PARAM_ERROR, "当前用户缺少身份或部门，无法创建报销单");
+        }
         ExpenseReport report = new ExpenseReport();
         report.setReportNo(generateReportNo());
-        report.setApplicantId(dto.getApplicantId());
-        report.setApplicantDeptId(dto.getApplicantDeptId());
+        report.setApplicantId(userId);
+        report.setApplicantDeptId(deptId);
         report.setTitle(dto.getTitle());
         report.setExpenseType(dto.getExpenseType());
         report.setAmountTotal(total);
@@ -136,7 +140,7 @@ public class ReportServiceImpl implements ReportService {
             itemMapper.insert(item);
             // 发票先上传后建单：建单时绑定到本单，校验必须是本人上传且未绑定（docs/11 §3.4）
             if (itemDTO.getInvoiceId() != null) {
-                invoiceService.bindReport(itemDTO.getInvoiceId(), report.getId(), dto.getApplicantId());
+                invoiceService.bindReport(itemDTO.getInvoiceId(), report.getId(), userId);
             }
         }
 
@@ -193,10 +197,48 @@ public class ReportServiceImpl implements ReportService {
     }
 
     @Override
-    public ReportDetailVO submitReport(Long id, String idempotencyKey, String traceId) {
+    public ReportDetailVO getDetailFor(Long id, Long userId, Long deptId, java.util.Set<String> roles) {
         ExpenseReport report = reportMapper.selectById(id);
         if (report == null) {
             throw new BizException(ErrorCode.NOT_FOUND, "报销单不存在");
+        }
+        if (!canViewDetail(report, userId, deptId, roles)) {
+            throw new BizException(ErrorCode.FORBIDDEN, "无权查看该报销单");
+        }
+        return getDetail(id);
+    }
+
+    /**
+     * 详情可见范围（docs/03 §2.2「本人/审批人/财务」）：
+     * 本人、该单任一审批人（含历史节点）、财务/管理员、同部门主管与分管。
+     * 与 {@link #listReports} 的 scope 判定同源，避免"列表能看、详情 403"。
+     */
+    private boolean canViewDetail(ExpenseReport report, Long userId, Long deptId, java.util.Set<String> roles) {
+        if (report.getApplicantId() != null && report.getApplicantId().equals(userId)) {
+            return true;
+        }
+        if (hasAnyRole(roles, "FINANCE", "ADMIN")) {
+            return true;
+        }
+        boolean sameDept = deptId != null && deptId.equals(report.getApplicantDeptId());
+        if (sameDept && hasAnyRole(roles, "SUPERVISOR", "DIRECTOR")) {
+            return true;
+        }
+        Long nodeCount = approvalMapper.selectCount(new LambdaQueryWrapper<ExpenseApproval>()
+                .eq(ExpenseApproval::getReportId, report.getId())
+                .eq(ExpenseApproval::getApproverId, userId));
+        return nodeCount != null && nodeCount > 0;
+    }
+
+    @Override
+    public ReportDetailVO submitReport(Long id, Long operatorId, String idempotencyKey, String traceId) {
+        ExpenseReport report = reportMapper.selectById(id);
+        if (report == null) {
+            throw new BizException(ErrorCode.NOT_FOUND, "报销单不存在");
+        }
+        // 归属校验必须在幂等回放之前：否则他人用别单的 Idempotency-Key 触发回放，会从 getDetail 拿到详情（docs/03 §2.2）
+        if (operatorId == null || !operatorId.equals(report.getApplicantId())) {
+            throw new BizException(ErrorCode.FORBIDDEN, "只有申请人本人可以提交该报销单");
         }
 
         // 幂等回放：已在审批中且 submit_token 与本次 Idempotency-Key 一致，直接返回详情，不重复写快照

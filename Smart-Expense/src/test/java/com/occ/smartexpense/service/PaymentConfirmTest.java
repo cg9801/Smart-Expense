@@ -120,12 +120,10 @@ class PaymentConfirmTest {
         item.setDescription("付款测试");
 
         ReportCreateDTO dto = new ReportCreateDTO();
-        dto.setApplicantId(APPLICANT_ID);
-        dto.setApplicantDeptId(APPLICANT_DEPT_ID);
         dto.setTitle("付款确认测试");
         dto.setExpenseType("TRAVEL");
         dto.setItems(List.of(item));
-        ReportDetailVO draft = reportService.createDraft(dto);
+        ReportDetailVO draft = reportService.createDraft(dto, APPLICANT_ID, APPLICANT_DEPT_ID);
 
         ExpenseReport report = reportMapper.selectById(draft.getId());
         report.setStatus("APPROVED");
